@@ -47,6 +47,10 @@
   var RETRY_BASE = 2000;
   var RETRY_MAX = 30000;
 
+  var DENIED =
+    "срок доступа по этой ссылке истёк. Откройте присланную вам ссылку " +
+    "заново — она выдаст доступ ещё раз";
+
   var NO_FRAMES =
     "Поток подключился, но кадры не приходят — обычно это несовместимый " +
     "кодек камеры (H.265). Попробуйте другой транспорт или включите " +
@@ -173,7 +177,7 @@
         });
       })
       .then(function (response) {
-        if (response.status === 403) throw new Error("доступ по ссылке закрыт");
+        if (response.status === 403) throw new Error(DENIED);
         if (response.status === 404) throw new Error("поток не найден на сервере");
         if (!response.ok) throw new Error("сервер ответил " + response.status);
         var location = response.headers.get("Location");
@@ -262,14 +266,7 @@
 
     // Safari и iOS играют HLS нативно — библиотека там не нужна.
     if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = hlsUrl;
-      return Promise.resolve({
-        kind: "HLS",
-        stop: function () {
-          video.removeAttribute("src");
-          video.load();
-        }
-      });
+      return nativeHls();
     }
 
     return loadHlsLibrary().then(function (available) {
@@ -294,17 +291,68 @@
         }
       };
 
-      hls.on(window.Hls.Events.ERROR, function (_event, data) {
-        if (!data || !data.fatal || session !== current) return;
-        var response = data.response || {};
-        scheduleRetry(
-          "HLS: " + (data.details || "ошибка") + (response.code ? " (" + response.code + ")" : "")
-        );
+      // Успех — это разобранный манифест, а не подключённая библиотека.
+      // Раньше startHls резолвился сразу, и плеер писал «HLS» даже когда
+      // сервер отвечал 403 или редиректом: транспорт выглядел выбранным,
+      // а картинки не было — и это сбивало с толку при разборе.
+      return new Promise(function (resolve, reject) {
+        var settled = false;
+
+        hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
+          if (settled) return;
+          settled = true;
+          resolve(session);
+        });
+
+        hls.on(window.Hls.Events.ERROR, function (_event, data) {
+          if (!data || !data.fatal) return;
+          var message = hlsErrorText(data);
+          if (!settled) {
+            settled = true;
+            session.stop();
+            reject(new Error(message));
+          } else if (session === current) {
+            scheduleRetry(message);
+          }
+        });
+
+        hls.loadSource(hlsUrl);
+        hls.attachMedia(video);
       });
-      hls.loadSource(hlsUrl);
-      hls.attachMedia(video);
-      return session;
     });
+  }
+
+  function nativeHls() {
+    return new Promise(function (resolve, reject) {
+      function cleanup() {
+        video.removeEventListener("loadedmetadata", onReady);
+        video.removeEventListener("error", onError);
+      }
+      function onReady() {
+        cleanup();
+        resolve({
+          kind: "HLS",
+          stop: function () {
+            video.removeAttribute("src");
+            video.load();
+          }
+        });
+      }
+      function onError() {
+        cleanup();
+        reject(new Error("браузер не смог открыть плейлист"));
+      }
+      video.addEventListener("loadedmetadata", onReady);
+      video.addEventListener("error", onError);
+      video.src = hlsUrl;
+    });
+  }
+
+  function hlsErrorText(data) {
+    var status = (data.response && data.response.code) || 0;
+    if (status === 403) return "HLS: " + DENIED;
+    if (status === 404) return "HLS: поток не поднят на сервере";
+    return "HLS: " + (data.details || "ошибка") + (status ? " (HTTP " + status + ")" : "");
   }
 
   // ── Общий цикл подключения ────────────────────────────────────────────────

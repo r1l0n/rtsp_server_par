@@ -31,7 +31,7 @@ from ..config import get_settings
 from ..logging_setup import get_logger
 from ..models import Camera, StreamProfile
 from .mtx_client import MediaMTXClient, MediaMTXError, PathNotFound
-from .paths import build_path_conf
+from .paths import build_path_conf, conf_differs
 from .probe import WEBRTC_AUDIO_CODECS, WEBRTC_VIDEO_CODECS, ProbeResult, probe_rtsp
 from .snapshot import grab_frame
 from .ssrf import strip_credentials
@@ -283,13 +283,25 @@ def _check_browser_compat(probe: ProbeResult, camera: Camera) -> list[tuple[str,
 async def _check_path_config(
     camera: Camera, rtsp_url: str, mtx: MediaMTXClient
 ) -> tuple[str, str, str]:
-    """Путь принят медиа-сервером?
+    """Путь принят медиа-сервером и совпадает с тем, что мы хотим?
 
-    Заодно пересоздаём его: если Control API отверг конфигурацию — а раньше об
-    этом знал только лог worker'а — оператор увидит текст отказа здесь.
+    Пишем только при расхождении. Безусловная перезапись перезагружала бы
+    конфигурацию MediaMTX прямо посреди измерения — диагностика ломала бы
+    ровно то, что проверяет.
     """
+    wanted = build_path_conf(camera, rtsp_url)
     try:
-        await mtx.upsert_path(camera.mtx_path, build_path_conf(camera, rtsp_url))
+        current = await mtx.get_config_path(camera.mtx_path)
+    except PathNotFound:
+        current = None
+    except MediaMTXError as exc:
+        return FAIL, f"Control API недоступен: {exc}", "проверьте контейнер mediamtx"
+
+    if current is not None and not conf_differs(current, wanted):
+        return OK, f"путь {camera.mtx_path} настроен и совпадает с ожидаемым", ""
+
+    try:
+        await mtx.upsert_path(camera.mtx_path, wanted)
     except MediaMTXError as exc:
         return (
             FAIL,
@@ -297,21 +309,56 @@ async def _check_path_config(
             "чаще всего это несовместимая версия образа mediamtx — сверьте набор "
             "ключей в mediamtx/mediamtx.yml с тегом образа в docker-compose.yml",
         )
-    return OK, f"путь {camera.mtx_path} настроен", ""
+    action = "создан" if current is None else "конфигурация обновлена"
+    return OK, f"путь {camera.mtx_path}: {action}", ""
 
 
-async def _pull_playlist(url: str) -> tuple[int | None, str]:
-    """Запрос плейлиста напрямую к MediaMTX, в обход Caddy.
+@dataclass(slots=True)
+class Probe:
+    """Ответ HTTP-эндпоинта медиа-сервера — с подробностями, а не одним кодом."""
 
-    Он же будит источник: у пути в режиме on-demand соединение с камерой
-    открывается только при появлении читателя.
+    status: int | None = None
+    location: str = ""
+    content_type: str = ""
+    body: str = ""
+    error: str = ""
+
+    def describe(self) -> str:
+        if self.error:
+            return f"запрос не удался: {self.error}"
+        parts = [f"HTTP {self.status}"]
+        if self.location:
+            parts.append(f"Location: {self.location}")
+        if self.content_type:
+            parts.append(self.content_type)
+        if self.body:
+            parts.append(f"тело: {self.body}")
+        return "; ".join(parts)
+
+
+async def _probe_endpoint(url: str, method: str = "GET", **kwargs: object) -> Probe:
+    """Запрос напрямую к MediaMTX, в обход Caddy.
+
+    Редиректы не глотаем, а показываем: 3xx на плейлисте означает, что запрос
+    вообще не дошёл до нужного обработчика, и знать, куда он уводит, важнее,
+    чем итоговый код.
+
+    trust_env=False — внутрисетевые запросы не должны уезжать в HTTP_PROXY,
+    который прилетает в контейнер вместе с .env.
     """
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(STREAM_WAIT)) as client:
-            response = await client.get(url)
-            return response.status_code, response.text[:200]
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(STREAM_WAIT), follow_redirects=False, trust_env=False
+        ) as client:
+            response = await client.request(method, url, **kwargs)  # type: ignore[arg-type]
+            return Probe(
+                status=response.status_code,
+                location=response.headers.get("location", ""),
+                content_type=response.headers.get("content-type", ""),
+                body=" ".join(response.text.split())[:160],
+            )
     except httpx.HTTPError as exc:
-        return None, str(exc)[:200]
+        return Probe(error=str(exc)[:200])
 
 
 async def _check_stream(camera: Camera, mtx: MediaMTXClient) -> list[tuple[str, str, str, str]]:
@@ -323,7 +370,7 @@ async def _check_stream(camera: Camera, mtx: MediaMTXClient) -> list[tuple[str, 
     """
     settings = get_settings()
     playlist_url = f"{settings.mtx_hls_url.rstrip('/')}/{camera.mtx_path}/index.m3u8"
-    puller = asyncio.create_task(_pull_playlist(playlist_url))
+    puller = asyncio.create_task(_probe_endpoint(playlist_url))
 
     item: dict[str, object] | None = None
     api_error = ""
@@ -344,9 +391,9 @@ async def _check_stream(camera: Camera, mtx: MediaMTXClient) -> list[tuple[str, 
                 break
 
         try:
-            status, body = await asyncio.wait_for(asyncio.shield(puller), timeout=3)
+            playlist = await asyncio.wait_for(asyncio.shield(puller), timeout=3)
         except TimeoutError:
-            status, body = None, "плейлист не отдан за отведённое время"
+            playlist = Probe(error="плейлист не отдан за отведённое время")
     finally:
         puller.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -372,15 +419,29 @@ async def _check_stream(camera: Camera, mtx: MediaMTXClient) -> list[tuple[str, 
         steps.append(("stream", "MediaMTX тянет поток", FAIL,
                       f"за {STREAM_WAIT} с поток не поднялся. {summary}"))
 
-    if status == 200:
-        steps.append(("delivery", "Отдача в браузер", OK,
-                      "плейлист LL-HLS отдаётся медиа-сервером"))
-    elif status is None:
-        steps.append(("delivery", "Отдача в браузер", FAIL,
-                      f"медиа-сервер не отдал плейлист: {body}"))
+    if playlist.status == 200:
+        steps.append(("delivery", "Отдача в браузер (LL-HLS)", OK,
+                      "плейлист отдаётся медиа-сервером"))
     else:
-        steps.append(("delivery", "Отдача в браузер", FAIL,
-                      f"медиа-сервер ответил {status} на запрос плейлиста"))
+        steps.append(("delivery", "Отдача в браузер (LL-HLS)", FAIL,
+                      f"плейлист {playlist_url.rsplit('/', 2)[-2]}/index.m3u8 — "
+                      f"{playlist.describe()}"))
+
+    # Второй транспорт проверяем отдельно: у HLS и WebRTC в MediaMTX разные
+    # серверы и разные причины отказать.
+    whep_url = f"{settings.mtx_webrtc_url.rstrip('/')}/{camera.mtx_path}/whep"
+    whep = await _probe_endpoint(
+        whep_url, "POST", headers={"Content-Type": "application/sdp"}, content=b"v=0"
+    )
+    if whep.status in (400, 415):
+        # Заведомо некорректный offer: важно лишь, что эндпоинт нашёлся.
+        steps.append(("whepsrv", "Отдача в браузер (WebRTC)", OK,
+                      "эндпоинт WHEP отвечает"))
+    elif whep.status == 404:
+        steps.append(("whepsrv", "Отдача в браузер (WebRTC)", FAIL,
+                      "медиа-сервер не знает такого пути для WebRTC"))
+    else:
+        steps.append(("whepsrv", "Отдача в браузер (WebRTC)", WARN, whep.describe()))
     return steps
 
 

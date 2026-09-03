@@ -28,22 +28,6 @@ from .paths import build_path_conf
 
 log = get_logger("reconciler")
 
-#: Ключи, которыми управляем мы. Всё остальное в ответе Control API — значения
-#: по умолчанию самого MediaMTX, и сравнивать их бессмысленно.
-_MANAGED_KEYS = (
-    "source",
-    "sourceOnDemand",
-    "sourceOnDemandStartTimeout",
-    "sourceOnDemandCloseAfter",
-    "rtspTransport",
-    "runOnDemand",
-    "runOnDemandRestart",
-    "runOnDemandStartTimeout",
-    "runOnDemandCloseAfter",
-    "maxReaders",
-    "record",
-)
-
 
 @dataclass(slots=True)
 class ReconcileReport:
@@ -79,13 +63,21 @@ async def desired_state(
 
 
 def _differs(current: dict[str, Any], wanted: dict[str, Any]) -> bool:
-    for key in _MANAGED_KEYS:
-        if key in wanted and current.get(key) != wanted[key]:
-            return True
-        # Ключ убрали из желаемого состояния, а в MediaMTX он остался непустым.
-        if key not in wanted and current.get(key) not in (None, "", False, 0, "0s"):
-            return True
-    return False
+    """Сравниваем ТОЛЬКО те ключи, которые задаём сами.
+
+    Всё остальное в ответе Control API — собственные значения по умолчанию
+    MediaMTX, и они не могут «разъехаться»: путь мы всегда пишем через
+    `replace`, а он сбрасывает незаданные поля к тем же самым умолчаниям.
+
+    Раньше здесь была вторая ветка: «ключ пропал из желаемого состояния, а в
+    MediaMTX он непустой — значит изменилось». Она сравнивала умолчания
+    MediaMTX (`runOnDemandStartTimeout: 10s`, `rtspTransport: tcp`) с
+    заглушкой из пустых значений и срабатывала ВСЕГДА. Реконсилятор
+    переписывал каждый путь каждые 15 секунд, MediaMTX на каждую запись
+    перечитывал конфигурацию целиком, и его лог состоял из одних
+    «reloading configuration» — в котором тонули настоящие ошибки источников.
+    """
+    return any(current.get(key) != value for key, value in wanted.items())
 
 
 async def reconcile(session: AsyncSession, mtx: MediaMTXClient) -> ReconcileReport:

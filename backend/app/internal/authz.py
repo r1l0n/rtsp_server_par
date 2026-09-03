@@ -168,6 +168,13 @@ async def authz(request: Request) -> Response:
         log.info("authz_denied", path=mtx_path, link_id=str(link_id), reason="link_invalid")
         return _DENY
 
+    # Пока зритель смотрит, доступ не должен протухать. Без продления зритель
+    # получал 403 ровно через VIEW_COOKIE_TTL после открытия ссылки — прямо
+    # посреди трансляции, и выглядело это как «плеер сломался сам по себе».
+    # Отзыв ссылки по-прежнему мгновенный: он удаляет ключ целиком.
+    ttl = get_settings().view_cookie_ttl_minutes * 60
+    await get_redis().expire(f"{_VIEWER_PREFIX}{viewer_id}", ttl)
+
     response = Response(status_code=200)
     # Caddy копирует эти заголовки в запрос к MediaMTX (copy_headers).
     response.headers["X-Mtx-Path"] = mtx_path

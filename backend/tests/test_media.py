@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 
-from app.media.paths import build_path_conf, new_mtx_path
+import pytest
+
+from app.media.paths import build_path_conf, conf_differs, new_mtx_path
 from app.media.probe import _interpret
-from app.media.reconciler import _differs
 from app.models import Camera, StreamProfile
 
 
@@ -70,22 +71,67 @@ def test_transcode_without_audio_drops_audio_track() -> None:
 
 
 # ─── Сравнение состояний ─────────────────────────────────────────────────────
+#
+# Ответ Control API содержит ВСЕ поля пути: наши плюс десятки собственных
+# умолчаний MediaMTX. Здесь воспроизведены те из них, которые раньше ломали
+# сравнение, — по каждому профилю не задаётся своя половина, и именно они
+# ошибочно читались как «конфигурация изменилась».
+MTX_DEFAULTS = {
+    "runOnDemand": "",
+    "runOnDemandRestart": False,
+    "runOnDemandStartTimeout": "10s",
+    "runOnDemandCloseAfter": "10s",
+    "sourceOnDemand": False,
+    "sourceOnDemandStartTimeout": "10s",
+    "sourceOnDemandCloseAfter": "60s",
+    "rtspTransport": "tcp",
+    "sourceRedirect": "",
+    "srtReadPassphrase": "",
+}
+
+
+def _as_mediamtx_returns_it(wanted: dict) -> dict:
+    """Как тот же путь выглядит в ответе Control API после нашей записи."""
+    return {"name": "abcdefgh12345678abcdefgh", **MTX_DEFAULTS, **wanted}
+
+
+@pytest.mark.parametrize("profile", [StreamProfile.passthrough, StreamProfile.transcode])
+def test_unchanged_path_is_never_rewritten(profile: StreamProfile) -> None:
+    """Регрессия: реконсилятор переписывал каждый путь каждые 15 секунд.
+
+    Сравнение считало изменением любое умолчание MediaMTX, которого нет в
+    нашей конфигурации. Из-за этого медиа-сервер бесконечно перечитывал
+    конфигурацию, в его логе не оставалось ничего, кроме «reloading
+    configuration», и ни одна камера не работала — ни в passthrough,
+    ни в transcode.
+    """
+    wanted = build_path_conf(_camera(profile=profile), "rtsp://203.0.113.5/s")
+    assert conf_differs(_as_mediamtx_returns_it(wanted), wanted) is False
+
+
+def test_real_change_is_still_detected_against_a_full_api_response() -> None:
+    wanted = build_path_conf(_camera(), "rtsp://203.0.113.5/new")
+    current = _as_mediamtx_returns_it(
+        build_path_conf(_camera(), "rtsp://203.0.113.5/old")
+    )
+    assert conf_differs(current, wanted) is True
+
 def test_identical_config_is_not_a_change() -> None:
     wanted = build_path_conf(_camera(), "rtsp://203.0.113.5/s")
     current = {**wanted, "someOtherMediaMtxDefault": 123}
-    assert _differs(current, wanted) is False
+    assert conf_differs(current, wanted) is False
 
 
 def test_changed_source_is_detected() -> None:
     wanted = build_path_conf(_camera(), "rtsp://203.0.113.5/new")
     current = build_path_conf(_camera(), "rtsp://203.0.113.5/old")
-    assert _differs(current, wanted) is True
+    assert conf_differs(current, wanted) is True
 
 
 def test_switch_to_transcode_is_detected() -> None:
     wanted = build_path_conf(_camera(profile=StreamProfile.transcode), "rtsp://203.0.113.5/s")
     current = build_path_conf(_camera(), "rtsp://203.0.113.5/s")
-    assert _differs(current, wanted) is True
+    assert conf_differs(current, wanted) is True
 
 
 # ─── Разбор ffprobe ──────────────────────────────────────────────────────────

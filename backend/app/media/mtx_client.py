@@ -73,6 +73,9 @@ class MediaMTXClient:
     async def list_config_paths(self) -> list[dict[str, Any]]:
         return await self._list_all("/v3/config/paths/list")
 
+    async def get_config_path(self, name: str) -> dict[str, Any]:
+        return await self._request("GET", f"/v3/config/paths/get/{name}")
+
     async def add_path(self, name: str, conf: dict[str, Any]) -> None:
         await self._request("POST", f"/v3/config/paths/add/{name}", json=conf)
 

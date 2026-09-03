@@ -54,6 +54,24 @@ def build_path_conf(camera: Camera, rtsp_url: str, *, close_after: int = 60) -> 
     }
 
 
+def conf_differs(current: dict[str, Any], wanted: dict[str, Any]) -> bool:
+    """Отличается ли конфигурация пути в MediaMTX от желаемой.
+
+    Сравниваем ТОЛЬКО заданные нами ключи. Всё остальное в ответе Control API —
+    собственные значения по умолчанию MediaMTX, и разъехаться они не могут:
+    путь всегда пишется через `replace`, который сбрасывает незаданные поля
+    к тем же самым умолчаниям.
+
+    Здесь была ошибка, из-за которой сервис не работал вовсе: код дополнительно
+    считал изменением «ключа нет в желаемом состоянии, а в MediaMTX он
+    непустой». Под это условие всегда попадали умолчания самого MediaMTX
+    (`runOnDemandStartTimeout: 10s`, `rtspTransport: tcp`), поэтому каждый путь
+    переписывался каждые 15 секунд, медиа-сервер на каждую запись перечитывал
+    конфигурацию целиком, а его лог состоял из одних «reloading configuration».
+    """
+    return any(current.get(key) != value for key, value in wanted.items())
+
+
 def _ffmpeg_command(camera: Camera, rtsp_url: str) -> str:
     """Команда транскодирования.
 
