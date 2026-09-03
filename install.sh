@@ -703,6 +703,31 @@ wait_healthy() {
     return 1
 }
 
+# Показывает логи контейнеров, которые не поднялись.
+#
+# Compose про упавший контейнер сообщает только «is unhealthy» — по этой
+# строке причину не найти, а лезть за логами руками в момент установки
+# неудобно. Поэтому показываем их сразу.
+show_container_failures() {
+    local cid name state shown=0
+    for cid in $($DC $(compose_files) ps -aq 2>/dev/null); do
+        state=$(docker inspect -f \
+            '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+            "$cid" 2>/dev/null || echo unknown)
+        case "$state" in
+            healthy|running) continue ;;
+        esac
+        name=$(docker inspect -f '{{.Name}}' "$cid" 2>/dev/null | sed 's|^/||' || echo "$cid")
+        shown=$((shown + 1))
+        echo
+        printf '  %s%s — %s%s\n' "$RED$B" "$name" "$state" "$R"
+        docker logs --tail 25 "$cid" 2>&1 | sed 's/^/      /'
+    done
+    [ "$shown" -eq 0 ] && info "Все контейнеры выглядят живыми — смотрите логи целиком."
+    echo
+    echo "  Полные логи: ${B}docker compose logs --tail=100${R}"
+}
+
 build_and_start() {
     step "Сборка и запуск"
 
@@ -710,17 +735,19 @@ build_and_start() {
     $DC $(compose_files) build --quiet
     ok "Образ собран"
 
-    $DC $(compose_files) up -d
+    if ! $DC $(compose_files) up -d; then
+        warn "Контейнеры не запустились."
+        show_container_failures
+        die "устраните причину и запустите скрипт заново — уже сделанное он не сломает."
+    fi
     ok "Контейнеры запущены"
 
     if wait_healthy; then
         ok "Все сервисы здоровы"
     else
         warn "Не все сервисы вышли в healthy за 3 минуты."
-        $DC $(compose_files) ps
-        echo
-        echo "  Посмотрите логи:  ${B}docker compose logs --tail=50 api mediamtx caddy${R}"
-        confirm "Продолжить установку?" "да" || die "разберитесь с логами и запустите скрипт заново."
+        show_container_failures
+        confirm "Продолжить установку?" "нет" || die "разберитесь с логами и запустите скрипт заново."
     fi
 }
 

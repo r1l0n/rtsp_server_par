@@ -48,6 +48,27 @@ def test_only_three_ports_are_published(compose: dict) -> None:
     assert published == {"80", "443", "443/udp", "8189/udp"}
 
 
+def test_redis_command_uses_space_separated_options(compose: dict) -> None:
+    """redis-server не понимает форму `--опция=значение`.
+
+    Всё, что идёт после `--`, он считает именем директивы, поэтому
+    `--appendonly=yes` превращается в директиву «appendonly=yes», которой не
+    существует, и сервер падает с «Bad directive». Контейнер уходит в цикл
+    перезапусков, а compose сообщает лишь «container is unhealthy» — по этому
+    сообщению причину не найти, поэтому проверяем форму записи здесь.
+
+    Команда задана строкой, а не списком: в списке YAML `- yes` стало бы
+    булевым true, и redis получил бы `--appendonly true`.
+    """
+    command = compose["services"]["redis"]["command"]
+
+    assert isinstance(command, str), "команда redis должна быть строкой (иначе YAML съест yes)"
+    assert command.startswith("redis-server ")
+    assert "=" not in command, "redis-server не поддерживает --опция=значение"
+    assert "--appendonly yes" in command
+    assert "--maxmemory-policy noeviction" in command
+
+
 def test_storage_services_have_no_published_ports(compose: dict) -> None:
     for name in ("postgres", "redis", "api", "worker"):
         assert not compose["services"][name].get("ports"), f"{name} не должен смотреть наружу"

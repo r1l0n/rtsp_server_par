@@ -139,12 +139,14 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    # noeviction: сессии и токены не должны вытесняться под давлением памяти
-    command:
-      - redis-server
-      - --appendonly=yes
-      - --maxmemory=256mb
-      - --maxmemory-policy=noeviction
+    # noeviction: сессии и токены не должны вытесняться под давлением памяти.
+    #
+    # Одной строкой, а не списком YAML, по двум причинам:
+    #   1. redis-server не понимает форму `--опция=значение` — всё после `--`
+    #      он считает именем директивы и падает с «Bad directive»;
+    #   2. в списке YAML `- yes` превратилось бы в булево true, и redis получил
+    #      бы `--appendonly true` вместо `yes`.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
     volumes:
       - redisdata:/data
     networks: [data]
