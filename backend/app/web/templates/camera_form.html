@@ -1,6 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Новая камера — {{ app_name }}{% endblock %}
 {% block content %}
+
+{% if preview %}
+<section class="card">
+  <h2>Предпросмотр</h2>
+  {% if normalized_url %}
+    <p class="hint">Адрес приведён к каноническому виду:
+       <code>{{ normalized_url }}</code> — спецсимволы логина и пароля
+       перекодированы автоматически.</p>
+  {% endif %}
+  {% include "_diagnosis.html" with context %}
+  <p class="hint">Камера ещё не сохранена. Ссылку в форме ниже мы не показываем —
+     чтобы пароль не осел в кэше браузера, — поэтому перед сохранением вставьте
+     её ещё раз.</p>
+</section>
+{% endif %}
+
 <div class="card">
   <h1>Добавить камеру</h1>
   <form method="post" action="/cameras">
@@ -27,30 +43,41 @@
     <fieldset>
       <legend>Режим потока</legend>
       <label class="check">
-        <input type="checkbox" name="on_demand" checked>
+        <input type="checkbox" name="on_demand"
+               {% if not form or form.on_demand %}checked{% endif %}>
         Подключаться к камере только когда есть зритель
         <span class="hint">Экономит канал и нагрузку на камеру. Первый кадр появляется
           на 1–3 секунды позже.</span>
       </label>
       <label class="check">
-        <input type="checkbox" name="audio_enabled" checked>
+        <input type="checkbox" name="audio_enabled"
+               {% if not form or form.audio_enabled %}checked{% endif %}>
         Передавать звук
       </label>
       <label>Профиль
         <select name="profile">
-          <option value="passthrough">Без перекодирования (рекомендуется)</option>
-          <option value="transcode">Перекодировать в H.264/Opus</option>
+          <option value="passthrough"
+                  {% if not form or form.profile == 'passthrough' %}selected{% endif %}>
+            Без перекодирования (рекомендуется)</option>
+          <option value="transcode" {% if form and form.profile == 'transcode' %}selected{% endif %}>
+            Перекодировать в H.264/Opus</option>
         </select>
-        <span class="hint">Перекодирование нужно только если камера отдаёт H.265 или
-          звук в AAC. Оно занимает примерно одно ядро CPU на камеру. После добавления
-          сервис сам определит кодеки и подскажет, нужно ли оно.</span>
+        <span class="hint">Перекодирование нужно, если камера отдаёт H.265, звук в AAC
+          или если медиа-сервер не может забрать поток напрямую. Оно занимает примерно
+          одно ядро CPU на камеру. Кнопка «Проверить» ниже скажет, нужно ли оно.</span>
       </label>
     </fieldset>
 
+    {# formaction вместо JS: CSP запрещает инлайновые обработчики, а вторая
+       кнопка submit с другим адресом делает то же самое и без скриптов. #}
     <div class="actions">
+      <button type="submit" formaction="/cameras/preview" formnovalidate
+              data-busy="Подключаюсь к камере…">Проверить и показать кадр</button>
       <button type="submit" class="primary">Добавить</button>
       <a class="button" href="/">Отмена</a>
     </div>
+    <span class="hint">Проверка идёт до полуминуты: сервис подключится к камере,
+      снимет кадр и скажет, покажет ли этот поток браузер.</span>
   </form>
 </div>
 {% endblock %}

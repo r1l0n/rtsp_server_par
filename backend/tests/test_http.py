@@ -97,3 +97,21 @@ def test_internal_endpoints_answer_without_html(client: TestClient) -> None:
     response = client.get("/internal/authz", headers={"X-Forwarded-Uri": "/"})
     assert response.status_code == 403
     assert response.text == ""
+
+
+def test_camera_preview_route_precedes_the_catch_all() -> None:
+    """POST /cameras/preview обязан объявляться раньше POST /cameras/{camera_id}.
+
+    Иначе «preview» уедет в camera_id, развалится на разборе UUID, и вместо
+    предпросмотра оператор получит «Данные формы заполнены неверно» — ошибку,
+    по которой причину не найти.
+    """
+    from app.web.panel_views import router
+
+    paths = [
+        route.path
+        for route in router.routes
+        if "POST" in getattr(route, "methods", set())
+        and route.path in ("/cameras/preview", "/cameras/{camera_id}")
+    ]
+    assert paths.index("/cameras/preview") < paths.index("/cameras/{camera_id}")

@@ -1,0 +1,38 @@
+{# Отчёт диагностики. Общий кусок для карточки камеры и для предпросмотра
+   на форме добавления: проверки там одни и те же, различаются только
+   доступные после отчёта действия — они остаются в вызывающих шаблонах.
+
+   Ожидает: diagnosis (media.diagnose.Diagnosis), frame (data:-URI или пусто). #}
+
+<div class="alert alert-{{ 'ok' if diagnosis.verdict_state == 'ok' else 'error' }}">
+  <strong>{{ diagnosis.verdict }}</strong>
+</div>
+
+{% if frame %}
+<figure class="frame">
+  <img src="{{ frame }}" alt="Кадр с камеры">
+  <figcaption class="hint">Кадр получен сервисом только что.</figcaption>
+</figure>
+{% endif %}
+
+<ul class="checks">
+  {% for step in diagnosis.steps %}
+  <li class="check-{{ step.state }}">
+    <span class="check-mark" aria-hidden="true">{{
+      '✓' if step.state == 'ok' else ('!' if step.state == 'warn' else '✕') }}</span>
+    <div>
+      <b>{{ step.title }}</b>
+      {% if step.detail %}<div class="check-detail">{{ step.detail }}</div>{% endif %}
+      {% if step.hint %}<div class="check-hint">{{ step.hint }}</div>{% endif %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+
+{% if diagnosis.raw %}
+<details class="raw">
+  <summary>Полный вывод ffprobe</summary>
+  <pre class="log">{{ diagnosis.raw }}</pre>
+  <p class="hint">Пароль в выводе замаскирован — этот текст можно пересылать как есть.</p>
+</details>
+{% endif %}

@@ -29,49 +29,29 @@
 <section class="card">
   <div class="page-head">
     <h2>Диагностика</h2>
-    <form method="post" action="/cameras/{{ camera.id }}/diagnose" class="inline"
-          data-busy="Проверяю камеру, это займёт до минуты…">
+    <form method="post" action="/cameras/{{ camera.id }}/diagnose" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="primary">Проверить сейчас</button>
+      <button type="submit" class="primary"
+              data-busy="Проверяю камеру…">Проверить сейчас</button>
     </form>
   </div>
 
   {% if diagnosis %}
-    <div class="alert alert-{{ 'ok' if diagnosis.verdict_state == 'ok' else 'error' }}">
-      <strong>{{ diagnosis.verdict }}</strong>
-    </div>
+    {% set frame = diagnosis_frame %}
+    {% include "_diagnosis.html" with context %}
 
-    <ul class="checks">
-      {% for step in diagnosis.steps %}
-      <li class="check-{{ step.state }}">
-        <span class="check-mark" aria-hidden="true">{{
-          '✓' if step.state == 'ok' else ('!' if step.state == 'warn' else '✕') }}</span>
-        <div>
-          <b>{{ step.title }}</b>
-          {% if step.detail %}<div class="check-detail">{{ step.detail }}</div>{% endif %}
-          {% if step.hint %}<div class="check-hint">{{ step.hint }}</div>{% endif %}
-        </div>
-      </li>
-      {% endfor %}
-    </ul>
-
-    {% if camera.profile.value == 'passthrough'
-          and diagnosis.probe and diagnosis.probe.ok and not diagnosis.probe.video_ok %}
+    {# Перекодирование предлагаем, когда браузер не покажет кодек либо когда
+       поток не смог забрать сам медиа-сервер: и то и другое лечится одинаково. #}
+    {% if camera.profile.value == 'passthrough' and diagnosis.failed
+          and diagnosis.failed | map(attribute='key') | select('in', ['webrtc', 'stream'])
+              | list %}
     <form method="post" action="/cameras/{{ camera.id }}/profile" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="profile" value="transcode">
       <button type="submit" class="primary">Включить перекодирование в H.264/Opus</button>
     </form>
-    <p class="hint">Занимает примерно одно ядро CPU на камеру, зато поток начинают
-       показывать все браузеры.</p>
-    {% endif %}
-
-    {% if diagnosis.raw %}
-    <details class="raw">
-      <summary>Полный вывод ffprobe</summary>
-      <pre class="log">{{ diagnosis.raw }}</pre>
-      <p class="hint">Пароль в выводе замаскирован — этот текст можно пересылать как есть.</p>
-    </details>
+    <p class="hint">Занимает примерно одно ядро CPU на камеру, зато поток тянет ffmpeg
+       и показывают его все браузеры.</p>
     {% endif %}
 
   {% elif camera.probe %}

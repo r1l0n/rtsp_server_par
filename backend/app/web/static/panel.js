@@ -66,18 +66,18 @@
     });
   });
 
-  // Долгие действия (диагностика идёт до минуты) блокируют кнопку и говорят,
-  // что происходит: без этого оператор жмёт «Проверить» второй и третий раз.
-  document.querySelectorAll("form[data-busy]").forEach(function (form) {
-    form.addEventListener("submit", function () {
-      var button = form.querySelector("button[type=submit], button:not([type])");
-      if (!button) return;
-      // disabled ставим следующим тиком: снятая прямо в обработчике submit
-      // кнопка в части браузеров отменяет саму отправку формы.
+  // Долгие действия (проверка камеры идёт до полуминуты) блокируют кнопку и
+  // говорят, что происходит: без этого оператор жмёт «Проверить» второй и
+  // третий раз. Признак висит на кнопке, а не на форме: в форме добавления
+  // камеры две кнопки submit с разными formaction.
+  document.querySelectorAll("button[data-busy]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      // disabled ставим следующим тиком: снятая прямо в обработчике кнопка
+      // в части браузеров отменяет саму отправку формы.
       setTimeout(function () {
         button.disabled = true;
         button.dataset.busyActive = "1";
-        button.textContent = form.dataset.busy;
+        button.textContent = button.dataset.busy;
       }, 0);
     });
   });

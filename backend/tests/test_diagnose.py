@@ -16,6 +16,7 @@ from app.media.diagnose import (
     Diagnosis,
     _check_browser_compat,
     _classify_rtsp_error,
+    _sdp_notes,
     _summarize,
 )
 from app.media.probe import ProbeResult, _meaningful_error
@@ -122,6 +123,46 @@ def test_audio_is_not_checked_when_disabled() -> None:
     assert "audio" not in keys
 
 
+# ─── Разбор SDP: чем эта камера неудобна строгому клиенту ────────────────────
+#
+# Реальный случай: ffprobe и VLC камеру открывают, MediaMTX — нет. Разница
+# видна только в SDP, который ffprobe печатает целиком, поэтому подсказку
+# собираем прямо из его вывода.
+SDP_LOG = """
+[rtsp @ 0x1] SDP:
+v=0
+o=- 1001 1 IN IP4 192.168.44.34
+m=video 0 RTP/AVP 105
+a=control:rtsp://192.168.44.34/media/video1/video
+a=rtpmap:105 H264/90000
+m=application 0 RTP/AVP 107
+a=control:rtsp://192.168.44.34/media/video1/metadata
+a=rtpmap:107 vnd.onvif.metadata/90000
+Unsupported codec with id 0 for input stream 1
+"""
+
+
+def test_sdp_notes_spot_onvif_metadata_track() -> None:
+    assert "ONVIF" in _sdp_notes(SDP_LOG)
+
+
+def test_sdp_notes_spot_private_control_address() -> None:
+    notes = _sdp_notes(SDP_LOG)
+    assert "192.168.44.34" in notes
+    assert "a=control" in notes
+
+
+@pytest.mark.parametrize("host", ["10.0.0.5", "172.20.1.1", "192.168.1.2", "127.0.0.1"])
+def test_sdp_notes_cover_every_private_range(host: str) -> None:
+    assert host in _sdp_notes(f"a=control:rtsp://{host}/live")
+
+
+def test_sdp_notes_stay_quiet_on_a_healthy_sdp() -> None:
+    """Пустая подсказка лучше выдуманной: иначе оператор пойдёт чинить исправное."""
+    healthy = "a=control:rtsp://203.0.113.5/live\na=rtpmap:96 H264/90000"
+    assert _sdp_notes(healthy) == ""
+
+
 # ─── Итоговый вердикт ────────────────────────────────────────────────────────
 def test_verdict_recommends_transcoding_when_codec_is_the_problem() -> None:
     report = Diagnosis()
@@ -141,6 +182,18 @@ def test_verdict_is_clean_when_nothing_failed() -> None:
 
     assert report.verdict_state == OK
     assert "порядке" in report.verdict
+
+
+def test_verdict_recommends_transcoding_when_mediamtx_cannot_pull() -> None:
+    """ffprobe камеру открыл, а медиа-сервер нет — обход тот же, транскод."""
+    report = Diagnosis()
+    report.add("rtsp", "RTSP-соединение", OK)
+    report.add("webrtc", "WebRTC (WHEP)", OK)
+    report.add("stream", "MediaMTX тянет поток", FAIL)
+    _summarize(report, _camera())
+
+    assert report.verdict_state == FAIL
+    assert "Перекодировать" in report.verdict
 
 
 def test_warnings_do_not_read_as_failure() -> None:

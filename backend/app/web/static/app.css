@@ -224,6 +224,17 @@ button:hover, .button:hover { border-color: var(--accent); }
 .check-detail { color: var(--ink); font-size: 14px; margin-top: 2px; }
 .check-hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
+/* Кадр из отчёта: доказательство, что сервис до камеры дошёл и картинку видит. */
+.frame { margin: 0 0 16px; }
+.frame img {
+  display: block;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #000;
+}
+.frame figcaption { margin-top: 6px; }
+
 .raw { margin-top: 16px; }
 .raw summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .log {

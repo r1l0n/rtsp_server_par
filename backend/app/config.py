@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://rtspgw:rtspgw@postgres:5432/rtspgw"
     redis_url: str = "redis://redis:6379/0"
     mtx_api_url: str = "http://mediamtx:9997"
+    # Те же адреса, но со стороны сети core — ими диагностика проверяет отдачу
+    # потока в обход Caddy, чтобы отделить «MediaMTX не отдаёт» от «не пускает
+    # forward_auth».
+    mtx_hls_url: str = "http://mediamtx:8888"
+    mtx_webrtc_url: str = "http://mediamtx:8889"
 
     # --- Секреты -------------------------------------------------------------
     # В проде ключ приходит файлом (docker secret). APP_SECRET_KEY — только для

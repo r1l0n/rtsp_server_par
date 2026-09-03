@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import secrets
 import uuid
@@ -85,6 +86,83 @@ async def camera_new_form(request: Request, user: CurrentUser) -> HTMLResponse:
     return render(request, "camera_form.html", user=user, camera=None)
 
 
+def _camera_form_values(
+    name: str, description: str, on_demand: str, audio_enabled: str, profile: str
+) -> dict[str, object]:
+    """Значения формы для повторного показа. Сам URL не возвращаем никогда:
+    в HTML он утёк бы вместе с паролем в кэш браузера и в историю."""
+    return {
+        "name": name,
+        "description": description,
+        "on_demand": on_demand == "on",
+        "audio_enabled": audio_enabled == "on",
+        "profile": profile,
+    }
+
+
+# Маршрут объявлен раньше POST /cameras/{camera_id}: иначе «preview» попал бы
+# в него как camera_id и развалился бы на разборе UUID.
+@router.post("/cameras/preview", response_class=HTMLResponse)
+async def camera_preview(
+    request: Request,
+    user: CurrentUser,
+    _: CsrfProtected,
+    rtsp_url: Annotated[str, Form()] = "",
+    name: Annotated[str, Form()] = "",
+    description: Annotated[str, Form()] = "",
+    on_demand: Annotated[str, Form()] = "on",
+    audio_enabled: Annotated[str, Form()] = "",
+    profile: Annotated[str, Form()] = StreamProfile.passthrough.value,
+) -> HTMLResponse:
+    """Проверка ссылки до сохранения камеры: кадр, кодеки, совместимость.
+
+    Камера здесь создаётся временно, только в памяти, и в БД не попадает —
+    смысл кнопки в том, чтобы не заводить запись ради проверки и не удалять
+    её потом. Шаги с MediaMTX пропускаются: пути ещё нет и быть не должно.
+    """
+    form = _camera_form_values(name, description, on_demand, audio_enabled, profile)
+
+    try:
+        target = await validate_rtsp_url(rtsp_url)
+    except UnsafeCameraUrl as exc:
+        return render(
+            request, "camera_form.html", status_code=400, user=user, camera=None,
+            error=str(exc), form=form,
+        )
+
+    draft = Camera(
+        name=name.strip() or "проверка",
+        host=target.host,
+        port=target.port,
+        mtx_path=new_mtx_path(),
+        profile=StreamProfile(profile),
+        on_demand=on_demand == "on",
+        audio_enabled=audio_enabled == "on",
+        is_enabled=True,
+    )
+    report = await diagnose(draft, target.url, None)
+
+    log.info(
+        "camera_previewed",
+        actor_id=str(user.id), host=target.host, port=target.port,
+        verdict=report.verdict_state,
+    )
+    return render(
+        request, "camera_form.html", user=user, camera=None, form=form,
+        preview=report,
+        preview_frame=_frame_data_uri(report.frame),
+        normalized_url=target.display_url if target.normalized else "",
+    )
+
+
+def _frame_data_uri(frame: bytes | None) -> str:
+    """JPEG прямо в разметку. Отдельный маршрут-картинка потребовал бы хранить
+    кадр непроверенной камеры на сервере — ради одного показа это лишнее."""
+    if not frame:
+        return ""
+    return "data:image/jpeg;base64," + base64.b64encode(frame).decode("ascii")
+
+
 @router.post("/cameras")
 async def camera_create(
     request: Request,
@@ -102,7 +180,8 @@ async def camera_create(
     if not name:
         return render(
             request, "camera_form.html", status_code=400, user=user, camera=None,
-            error="Укажите название камеры", form={"name": name, "rtsp_url": ""},
+            error="Укажите название камеры",
+            form=_camera_form_values(name, description, on_demand, audio_enabled, profile),
         )
 
     try:
@@ -110,7 +189,8 @@ async def camera_create(
     except UnsafeCameraUrl as exc:
         return render(
             request, "camera_form.html", status_code=400, user=user, camera=None,
-            error=str(exc), form={"name": name, "description": description, "rtsp_url": ""},
+            error=str(exc),
+            form=_camera_form_values(name, description, on_demand, audio_enabled, profile),
         )
 
     camera = Camera(
@@ -307,7 +387,11 @@ async def camera_diagnose(
         verdict=report.verdict_state,
         failed=[step.key for step in report.failed],
     )
-    return await _render_detail(request, db, user, camera, diagnosis=report)
+    return await _render_detail(
+        request, db, user, camera,
+        diagnosis=report,
+        diagnosis_frame=_frame_data_uri(report.frame),
+    )
 
 
 @router.post("/cameras/{camera_id}/profile")

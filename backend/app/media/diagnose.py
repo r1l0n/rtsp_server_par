@@ -5,9 +5,15 @@
 отвечает на вопрос «почему не показывает» и запускается оператором вручную из
 панели — она обязана дать связный отчёт, а не одну строку ошибки.
 
-Порядок шагов повторяет путь пакета: имя -> TCP -> RTSP -> кодеки -> браузер ->
-MediaMTX. Первый упавший шаг и есть ответ; дальше идти обычно бессмысленно, но
-мы всё равно идём, чтобы за один прогон собрать полную картину.
+Порядок шагов повторяет путь пакета:
+
+    камера → TCP → RTSP → декодер → MediaMTX → отдача в браузер
+
+Ключевой шаг здесь — не ffprobe, а «MediaMTX тянет поток». ffprobe и VLC
+прощают камере многое: пропускают неизвестные дорожки, чинят неверные адреса
+в SDP. MediaMTX строже, поэтому «в VLC работает, а тут чёрный экран» — самая
+частая жалоба, и различить эти два случая можно, только заставив MediaMTX
+реально подключиться и посмотреть, пошли ли байты.
 """
 
 from __future__ import annotations
@@ -19,26 +25,32 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+import httpx
+
+from ..config import get_settings
 from ..logging_setup import get_logger
 from ..models import Camera, StreamProfile
 from .mtx_client import MediaMTXClient, MediaMTXError, PathNotFound
+from .paths import build_path_conf
 from .probe import WEBRTC_AUDIO_CODECS, WEBRTC_VIDEO_CODECS, ProbeResult, probe_rtsp
+from .snapshot import grab_frame
 from .ssrf import strip_credentials
 
 log = get_logger("diagnose")
 
-TCP_TIMEOUT = 6.0
-PROBE_TIMEOUT = 15
+TCP_TIMEOUT = 5.0
+PROBE_TIMEOUT = 12
+FRAME_TIMEOUT = 15
+#: Сколько ждём, что путь поднимется после того, как мы его разбудили.
+STREAM_WAIT = 18
 
 #: Что MediaMTX умеет отдать в LL-HLS. Шире, чем WebRTC (H.265 сюда попадает),
 #: но браузеры играют HEVC далеко не все — отсюда отдельная оговорка в выводе.
 HLS_VIDEO_CODECS = frozenset({"h264", "h265", "hevc"})
-HLS_AUDIO_CODECS = frozenset({"aac", "opus", "mp3"})
 
 OK = "ok"
 FAIL = "fail"
 WARN = "warn"
-SKIP = "skip"
 
 
 @dataclass(slots=True)
@@ -54,6 +66,9 @@ class Step:
 class Diagnosis:
     steps: list[Step] = field(default_factory=list)
     probe: ProbeResult | None = None
+    #: JPEG первого кадра, если его удалось получить. Картинка — самое
+    #: убедительное доказательство, что до камеры дошли и поток декодируется.
+    frame: bytes | None = None
     #: Сырой вывод ffprobe с вырезанным паролем — то, что просят приложить
     #: к обращению в поддержку.
     raw: str = ""
@@ -70,7 +85,7 @@ class Diagnosis:
         return [s for s in self.steps if s.state == FAIL]
 
 
-# ─── Отдельные проверки ──────────────────────────────────────────────────────
+# ─── Сеть ────────────────────────────────────────────────────────────────────
 async def _check_dns(host: str) -> tuple[str, str, str]:
     """(состояние, что показать, подсказка)."""
     loop = asyncio.get_running_loop()
@@ -117,6 +132,7 @@ async def _check_tcp(host: str, port: int) -> tuple[str, str, str]:
     return OK, f"порт {port} открыт, отклик {elapsed:.0f} мс", ""
 
 
+# ─── RTSP ────────────────────────────────────────────────────────────────────
 def _classify_rtsp_error(message: str) -> str:
     """Человеческая подсказка по типовому сообщению ffprobe."""
     lowered = message.lower()
@@ -173,12 +189,51 @@ async def _check_rtsp(url: str) -> tuple[str, str, str, ProbeResult, str]:
     return FAIL, detail, _classify_rtsp_error(detail), result, raw
 
 
+#: Приватные префиксы, которые камеры любят подставлять в a=control.
+_PRIVATE_PREFIXES = (
+    "192.168.",
+    "10.",
+    "127.",
+    "169.254.",
+    *(f"172.{octet}." for octet in range(16, 32)),
+)
+
+
+def _sdp_notes(ffprobe_log: str) -> str:
+    """Особенности SDP, из-за которых MediaMTX спотыкается там, где VLC нет.
+
+    ffprobe печатает SDP камеры целиком — грех этим не воспользоваться. Обе
+    проверки ниже взяты из реальных поломок: строгий RTSP-клиент делает SETUP
+    всех объявленных дорожек и идёт по адресу из a=control, а лояльные ffmpeg
+    и VLC и то и другое обходят.
+    """
+    notes: list[str] = []
+    if "vnd.onvif.metadata" in ffprobe_log:
+        notes.append(
+            "камера объявляет рядом с видео служебную дорожку ONVIF-метаданных — "
+            "ffprobe её пропускает («Unsupported codec»), строгий клиент обязан "
+            "сделать по ней SETUP и может на этом сорваться"
+        )
+    for line in ffprobe_log.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("a=control:rtsp://"):
+            continue
+        host = urlsplit(stripped[len("a=control:") :]).hostname or ""
+        if host.startswith(_PRIVATE_PREFIXES):
+            notes.append(
+                f"в SDP камера указывает себя по внутреннему адресу {host} (a=control), "
+                f"снаружи он недостижим"
+            )
+            break
+    return "; ".join(notes)
+
+
+# ─── Совместимость с браузером ───────────────────────────────────────────────
 def _check_browser_compat(probe: ProbeResult, camera: Camera) -> list[tuple[str, str, str, str]]:
     """Что из этого потока браузер реально сможет показать."""
     steps: list[tuple[str, str, str, str]] = []
-    transcoding = camera.profile is StreamProfile.transcode
 
-    if transcoding:
+    if camera.profile is StreamProfile.transcode:
         steps.append(
             ("webrtc", "WebRTC (WHEP)", OK,
              "включено перекодирование в H.264/Opus — WebRTC сыграет в любом браузере")
@@ -224,44 +279,127 @@ def _check_browser_compat(probe: ProbeResult, camera: Camera) -> list[tuple[str,
     return steps
 
 
-async def _check_mediamtx(camera: Camera, mtx: MediaMTXClient) -> tuple[str, str, str]:
+# ─── MediaMTX ────────────────────────────────────────────────────────────────
+async def _check_path_config(
+    camera: Camera, rtsp_url: str, mtx: MediaMTXClient
+) -> tuple[str, str, str]:
+    """Путь принят медиа-сервером?
+
+    Заодно пересоздаём его: если Control API отверг конфигурацию — а раньше об
+    этом знал только лог worker'а — оператор увидит текст отказа здесь.
+    """
     try:
-        item = await mtx.get_active_path(camera.mtx_path)
-    except PathNotFound:
+        await mtx.upsert_path(camera.mtx_path, build_path_conf(camera, rtsp_url))
+    except MediaMTXError as exc:
         return (
             FAIL,
-            "пути нет в MediaMTX",
-            "камера выключена либо реконсилятор ещё не отработал — подождите "
-            "15 секунд и повторите",
+            f"Control API отверг конфигурацию пути: {exc}",
+            "чаще всего это несовместимая версия образа mediamtx — сверьте набор "
+            "ключей в mediamtx/mediamtx.yml с тегом образа в docker-compose.yml",
         )
-    except MediaMTXError as exc:
-        return FAIL, f"Control API недоступен: {exc}", "проверьте контейнер mediamtx"
+    return OK, f"путь {camera.mtx_path} настроен", ""
 
-    ready = bool(item.get("ready"))
-    readers = len(item.get("readers") or [])
-    tracks = item.get("tracks") or []
-    received = int(item.get("bytesReceived") or 0)
 
-    detail = (
-        f"источник: {item.get('source', {}).get('type') if item.get('source') else 'нет'}; "
-        f"дорожки: {', '.join(tracks) or 'нет'}; "
-        f"принято {received / 1024 / 1024:.1f} МБ; зрителей: {readers}"
+async def _pull_playlist(url: str) -> tuple[int | None, str]:
+    """Запрос плейлиста напрямую к MediaMTX, в обход Caddy.
+
+    Он же будит источник: у пути в режиме on-demand соединение с камерой
+    открывается только при появлении читателя.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(STREAM_WAIT)) as client:
+            response = await client.get(url)
+            return response.status_code, response.text[:200]
+    except httpx.HTTPError as exc:
+        return None, str(exc)[:200]
+
+
+async def _check_stream(camera: Camera, mtx: MediaMTXClient) -> list[tuple[str, str, str, str]]:
+    """Заставляем MediaMTX подключиться к камере и смотрим, что вышло.
+
+    Главный шаг диагностики. Без него камера в режиме on-demand всегда выглядит
+    здоровой: путь создан, читателей нет — и провала не видно до тех пор, пока
+    его не увидит зритель.
+    """
+    settings = get_settings()
+    playlist_url = f"{settings.mtx_hls_url.rstrip('/')}/{camera.mtx_path}/index.m3u8"
+    puller = asyncio.create_task(_pull_playlist(playlist_url))
+
+    item: dict[str, object] | None = None
+    api_error = ""
+    deadline = time.monotonic() + STREAM_WAIT
+
+    try:
+        while time.monotonic() < deadline:
+            await asyncio.sleep(1)
+            try:
+                item = await mtx.get_active_path(camera.mtx_path)
+            except PathNotFound:
+                item = None
+                continue
+            except MediaMTXError as exc:
+                api_error = str(exc)
+                break
+            if item.get("ready"):
+                break
+
+        try:
+            status, body = await asyncio.wait_for(asyncio.shield(puller), timeout=3)
+        except TimeoutError:
+            status, body = None, "плейлист не отдан за отведённое время"
+    finally:
+        puller.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await puller
+
+    if api_error:
+        return [("stream", "MediaMTX тянет поток", FAIL, f"Control API недоступен: {api_error}")]
+    if item is None:
+        return [("stream", "MediaMTX тянет поток", FAIL,
+                 "путь исчез из медиа-сервера — он его не принял")]
+
+    tracks = [str(track) for track in (item.get("tracks") or [])]  # type: ignore[union-attr]
+    received = int(item.get("bytesReceived") or 0)  # type: ignore[arg-type]
+    summary = f"дорожки: {', '.join(tracks) or 'нет'}; принято {received / 1048576:.2f} МБ"
+
+    steps: list[tuple[str, str, str, str]] = []
+    if item.get("ready") and received > 0:
+        steps.append(("stream", "MediaMTX тянет поток", OK, summary))
+    elif item.get("ready"):
+        steps.append(("stream", "MediaMTX тянет поток", WARN,
+                      f"путь готов, но данные ещё не пошли. {summary}"))
+    else:
+        steps.append(("stream", "MediaMTX тянет поток", FAIL,
+                      f"за {STREAM_WAIT} с поток не поднялся. {summary}"))
+
+    if status == 200:
+        steps.append(("delivery", "Отдача в браузер", OK,
+                      "плейлист LL-HLS отдаётся медиа-сервером"))
+    elif status is None:
+        steps.append(("delivery", "Отдача в браузер", FAIL,
+                      f"медиа-сервер не отдал плейлист: {body}"))
+    else:
+        steps.append(("delivery", "Отдача в браузер", FAIL,
+                      f"медиа-сервер ответил {status} на запрос плейлиста"))
+    return steps
+
+
+def _stream_hint(state: str, ffprobe_log: str) -> str:
+    """Подсказка к провалу на стороне медиа-сервера.
+
+    Самый непрозрачный для оператора случай: ffprobe камеру открыл, а MediaMTX
+    нет. Значит клиенты разошлись в трактовке ответа камеры, и полезнее всего
+    указать на конкретные особенности именно этого SDP.
+    """
+    if state == OK:
+        return ""
+    base = (
+        "ffprobe эту камеру открывает, а медиа-сервер — нет. Точная причина в его "
+        "логе: docker compose logs --tail=200 mediamtx. Обходится профилем "
+        "«Перекодировать в H.264/Opus» — там поток тянет ffmpeg"
     )
-
-    if ready:
-        return OK, f"поток поднят. {detail}", ""
-    if camera.on_demand and readers == 0:
-        return (
-            OK,
-            f"путь создан, соединение с камерой закрыто до первого зрителя "
-            f"(режим on-demand). {detail}",
-            "",
-        )
-    return (
-        FAIL,
-        f"путь создан, но поток не поднимается. {detail}",
-        "смотрите логи медиа-сервера: docker compose logs --tail=100 mediamtx",
-    )
+    notes = _sdp_notes(ffprobe_log)
+    return f"{base}. Что подозрительно в SDP камеры: {notes}" if notes else base
 
 
 # ─── Сборка отчёта ───────────────────────────────────────────────────────────
@@ -269,7 +407,6 @@ async def diagnose(camera: Camera, rtsp_url: str, mtx: MediaMTXClient | None) ->
     report = Diagnosis()
     masked = strip_credentials(rtsp_url)
 
-    # 1. Что вообще будем открывать.
     parts = urlsplit(rtsp_url)
     if parts.path in ("", "/"):
         report.add(
@@ -286,7 +423,6 @@ async def diagnose(camera: Camera, rtsp_url: str, mtx: MediaMTXClient | None) ->
             "включите галочку «Камера включена» — пока она снята, путь в MediaMTX не создаётся",
         )
 
-    # 2. Сеть.
     state, detail, hint = await _check_dns(camera.host)
     report.add("dns", "Имя хоста", state, detail, hint)
     if state == FAIL:
@@ -301,7 +437,6 @@ async def diagnose(camera: Camera, rtsp_url: str, mtx: MediaMTXClient | None) ->
         report.verdict_state = FAIL
         return report
 
-    # 3. Сам RTSP.
     state, detail, hint, probe, raw = await _check_rtsp(rtsp_url)
     report.add("rtsp", "RTSP-соединение", state, detail, hint)
     report.probe = probe
@@ -310,12 +445,8 @@ async def diagnose(camera: Camera, rtsp_url: str, mtx: MediaMTXClient | None) ->
     if not probe.ok:
         report.verdict = "Камера доступна по сети, но поток не отдаёт."
         report.verdict_state = FAIL
-        if mtx is not None:
-            state, detail, hint = await _check_mediamtx(camera, mtx)
-            report.add("mediamtx", "Состояние в MediaMTX", state, detail, hint)
         return report
 
-    # 4. Кодеки и совместимость с браузером.
     geometry = f"{probe.width}×{probe.height}" if probe.width else "разрешение неизвестно"
     fps = f", {probe.fps:g} fps" if probe.fps else ""
     report.add(
@@ -323,13 +454,27 @@ async def diagnose(camera: Camera, rtsp_url: str, mtx: MediaMTXClient | None) ->
         f"видео {probe.video_codec.upper()} · {geometry}{fps}; "
         f"звук {probe.audio_codec.upper() or 'нет'}",
     )
+
+    frame, frame_error = await grab_frame(rtsp_url, timeout=FRAME_TIMEOUT)
+    report.frame = frame
+    report.add(
+        "frame", "Кадр с камеры", OK if frame else WARN,
+        "получен — снимок ниже" if frame else f"кадр не получен: {frame_error}",
+        "" if frame else "поток открывается, но декодировать его не удалось",
+    )
+
     for key, title, compat_state, compat_detail in _check_browser_compat(probe, camera):
         report.add(key, title, compat_state, compat_detail)
 
-    # 5. Что об этом думает медиа-сервер.
     if mtx is not None:
-        state, detail, hint = await _check_mediamtx(camera, mtx)
-        report.add("mediamtx", "Состояние в MediaMTX", state, detail, hint)
+        state, detail, hint = await _check_path_config(camera, rtsp_url, mtx)
+        report.add("mtxconf", "Путь в MediaMTX", state, detail, hint)
+        if state == OK:
+            for key, title, stream_state, stream_detail in await _check_stream(camera, mtx):
+                report.add(
+                    key, title, stream_state, stream_detail,
+                    _stream_hint(stream_state, raw) if key == "stream" else "",
+                )
 
     _summarize(report, camera)
     return report
@@ -349,11 +494,20 @@ def _summarize(report: Diagnosis, camera: Camera) -> None:
         return
 
     report.verdict_state = FAIL
-    if any(s.key == "webrtc" for s in failed) and camera.profile is StreamProfile.passthrough:
+    keys = {s.key for s in failed}
+
+    if "webrtc" in keys and camera.profile is StreamProfile.passthrough:
         report.verdict = (
             "Камера работает, но её кодек браузер не покажет. Включите профиль "
             "«Перекодировать в H.264/Opus» — это единственное рабочее решение "
             "для таких камер."
+        )
+        return
+    if "stream" in keys and camera.profile is StreamProfile.passthrough:
+        report.verdict = (
+            "Камера отдаёт поток, но медиа-сервер его не поднимает — они расходятся "
+            "в трактовке ответа камеры. Включите профиль «Перекодировать в "
+            "H.264/Opus»: там поток тянет ffmpeg, который к таким камерам терпимее."
         )
         return
     report.verdict = "Не работает: " + "; ".join(s.title.lower() for s in failed)
