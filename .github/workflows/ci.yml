@@ -56,14 +56,14 @@ jobs:
 
       - name: Синтаксис shell-скриптов
         run: |
-          for f in install.sh ops/*.sh tests/*.sh; do
+          for f in install.sh uninstall.sh ops/*.sh tests/*.sh; do
             bash -n "$f" || exit 1
           done
 
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck --severity=warning install.sh ops/*.sh || true
+          shellcheck --severity=warning install.sh uninstall.sh ops/*.sh || true
 
       - name: Тесты установщика
         run: bash tests/test_install_sh.sh

@@ -33,6 +33,10 @@ die()   { printf '\n%sОШИБКА:%s %s\n\n' "$RED$B" "$R" "$1" >&2; exit 1; }
 
 TOTAL_STEPS=10
 
+#: Тестовый CA Let's Encrypt: сертификаты недоверенные, зато без лимита
+#: «5 штук на набор имён в неделю» — нужен при повторных прогонах установки.
+ACME_CA_STAGING="https://acme-staging-v02.api.letsencrypt.org/directory"
+
 # Скрипт идемпотентен: .env можно переиспользовать, ключ шифрования никогда
 # не перезаписывается, docker compose up повторяем сколько угодно.
 trap 'die "сбой на строке $LINENO. Устраните причину и запустите скрипт заново — уже сделанное он не сломает."' ERR
@@ -269,45 +273,62 @@ detect_public_ip() {
     printf '%s' "$ip"
 }
 
-collect_settings() {
-    step "Настройки"
+is_ipv4() {
+    [[ "$1" =~ ^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$ ]]
+}
 
-    # Значения по умолчанию задаём до всех ветвлений: при повторном запуске
-    # часть вопросов не задаётся, а переменные всё равно читаются дальше,
-    # и под set -u это было бы падением.
-    REUSE_ENV=0
-    MONITORING=0
-    FETCH_HLS=0
-    SETUP_FIREWALL=0
+# Приватный или иначе не маршрутизируемый в интернете адрес. Для таких
+# Let's Encrypt не сможет пройти проверку, и остаётся только свой CA.
+is_private_ipv4() {
+    local a b IFS=.
+    read -r a b _ _ <<< "$1"
+    case "$a" in
+        10|127|0) return 0 ;;
+        169) [ "$b" = "254" ] && return 0 ;;
+        172) [ "$b" -ge 16 ] && [ "$b" -le 31 ] && return 0 ;;
+        192) [ "$b" = "168" ] && return 0 ;;
+        100) [ "$b" -ge 64 ] && [ "$b" -le 127 ] && return 0 ;;
+    esac
+    return 1
+}
 
-    if [ -f .env ]; then
-        warn "Файл .env уже существует."
-        if confirm "Использовать его и не спрашивать настройки заново?" "да"; then
-            # shellcheck disable=SC1091
-            set -a; . ./.env; set +a
-            REUSE_ENV=1
-            if [ -n "${GRAFANA_PASSWORD:-}" ]; then
-                MONITORING=1
-            fi
-            ok "Использую существующий .env (домен: ${DOMAIN:-не задан})"
-            [ -n "${DOMAIN:-}" ] || die "в .env не задан DOMAIN. Удалите файл и запустите скрипт заново."
-            ask_remaining
-            return 0
-        fi
-        cp -a .env ".env.backup-$(date +%Y%m%d-%H%M%S)"
-        info "Старый .env сохранён рядом с суффиксом .backup-*"
-    fi
+# 203.0.113.10 -> 203-0-113-10.sslip.io
+#
+# sslip.io — публичный DNS-сервис, который резолвит такие имена обратно в
+# зашитый в них адрес. Домен покупать не нужно, а Let's Encrypt проверяет
+# его как обычное имя и выдаёт нормальный сертификат.
+sslip_name() {
+    printf '%s.sslip.io' "${1//./-}"
+}
+
+# Спрашивает адрес сервиса и способ получения сертификата.
+# Выставляет DOMAIN, TLS_ISSUER, PUBLIC_HOST и ACCESS_MODE.
+ask_address() {
+    local server_ip resolved
+    server_ip="$(detect_public_ip)"
 
     echo
-    echo "  ${DIM}Домен, на котором будет работать панель и публичные ссылки.${R}"
-    echo "  ${DIM}A-запись должна уже указывать на этот сервер — иначе Let's Encrypt${R}"
-    echo "  ${DIM}не выдаст сертификат.${R}"
+    choose ACCESS_MODE "Как будете открывать панель и раздавать ссылки?" \
+        "domain:Есть домен — сертификат Let's Encrypt, ничего не предупреждает (лучший вариант)" \
+        "sslip:Домена нет, IP публичный — адрес вида 203-0-113-10.sslip.io, сертификат тоже настоящий" \
+        "selfsigned:Только IP — свой сертификат, браузер будет предупреждать (для внутренней сети)"
+
+    case "$ACCESS_MODE" in
+        domain)   ask_address_domain "$server_ip" ;;
+        sslip)    ask_address_sslip "$server_ip" ;;
+        selfsigned) ask_address_selfsigned "$server_ip" ;;
+    esac
+}
+
+ask_address_domain() {
+    local server_ip="$1" resolved
+    echo
+    echo "  ${DIM}A-запись домена должна уже указывать на этот сервер — иначе${R}"
+    echo "  ${DIM}Let's Encrypt не сможет проверить владение и не выдаст сертификат.${R}"
     ask DOMAIN "Домен" "" \
         '^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$' \
         "Похоже на опечатку. Пример: cam.company.ru"
 
-    local server_ip resolved
-    server_ip="$(detect_public_ip)"
     resolved="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1 {print $1}' || true)"
     if [ -z "$resolved" ]; then
         warn "Домен $DOMAIN пока никуда не резолвится."
@@ -321,16 +342,125 @@ collect_settings() {
         ok "DNS в порядке: $DOMAIN → $resolved"
     fi
 
+    ask_acme_email
+    echo
+    echo "  ${DIM}Адрес, который уходит браузеру в WebRTC-кандидатах. Обычно${R}"
+    echo "  ${DIM}совпадает с доменом; если сервер за NAT — публичный IP.${R}"
+    ask PUBLIC_HOST "Публичный адрес для WebRTC" "$DOMAIN"
+}
+
+ask_address_sslip() {
+    local server_ip="$1" ip resolved
+    echo
+    echo "  ${DIM}Из IP получится имя вида 203-0-113-10.sslip.io. Публичный сервис${R}"
+    echo "  ${DIM}sslip.io резолвит его обратно в этот же адрес, поэтому Let's Encrypt${R}"
+    echo "  ${DIM}выдаёт на него обычный сертификат. Домен покупать не нужно.${R}"
+    while true; do
+        ask ip "Публичный IP этого сервера" "$server_ip"
+        if ! is_ipv4 "$ip"; then
+            warn "Это не похоже на IPv4-адрес."
+            continue
+        fi
+        if is_private_ipv4 "$ip"; then
+            warn "$ip — приватный адрес. Let's Encrypt не сможет до него достучаться."
+            warn "Для внутренней сети выберите третий вариант — свой сертификат."
+            confirm "Всё равно использовать этот адрес?" "нет" && break
+            continue
+        fi
+        break
+    done
+
+    DOMAIN="$(sslip_name "$ip")"
+    PUBLIC_HOST="$ip"
+    ok "Адрес сервиса: https://${DOMAIN}"
+
+    resolved="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1 {print $1}' || true)"
+    if [ "$resolved" = "$ip" ]; then
+        ok "sslip.io отвечает правильно: $DOMAIN → $resolved"
+    else
+        warn "Проверить $DOMAIN через DNS не удалось (получено: ${resolved:-ничего})."
+        warn "Возможно, DNS сервера блокирует сторонние зоны. Тогда сертификат"
+        warn "не выпустится — используйте свой домен или вариант со своим CA."
+        confirm "Продолжить?" "да" || die "выберите другой режим и запустите скрипт заново."
+    fi
+
+    ask_acme_email
+}
+
+ask_address_selfsigned() {
+    local server_ip="$1" ip
+    echo
+    echo "  ${DIM}Caddy выпустит сертификат собственным центром сертификации.${R}"
+    echo "  ${DIM}Трафик шифруется полноценно, но браузер будет показывать${R}"
+    echo "  ${DIM}предупреждение, пока корневой сертификат не установлен на${R}"
+    echo "  ${DIM}машины зрителей. В конце установки будет команда, как его забрать.${R}"
+    while true; do
+        ask ip "IP-адрес этого сервера" "$server_ip"
+        is_ipv4 "$ip" && break
+        warn "Это не похоже на IPv4-адрес."
+    done
+
+    DOMAIN="$ip"
+    PUBLIC_HOST="$ip"
+    TLS_ISSUER="internal"
+    ok "Адрес сервиса: https://${ip} (сертификат свой)"
+}
+
+ask_acme_email() {
     echo
     echo "  ${DIM}Почта для Let's Encrypt: туда придёт письмо, если сертификат${R}"
     echo "  ${DIM}вдруг перестанет обновляться.${R}"
     ask ACME_EMAIL "Почта администратора" "" \
         '^[^@[:space:]]+@[^@[:space:]]+\.[a-zA-Z]{2,}$' "Введите корректный адрес."
+    TLS_ISSUER="$ACME_EMAIL"
 
     echo
-    echo "  ${DIM}Адрес, который уходит браузеру в WebRTC-кандидатах. Обычно${R}"
-    echo "  ${DIM}совпадает с доменом; если сервер за NAT — публичный IP.${R}"
-    ask PUBLIC_HOST "Публичный адрес для WebRTC" "$DOMAIN"
+    echo "  ${DIM}У Let's Encrypt лимит: 5 сертификатов на один набор имён${R}"
+    echo "  ${DIM}в неделю. Если вы ставите сервис несколько раз подряд, чтобы${R}"
+    echo "  ${DIM}попробовать разные режимы, в него легко упереться и потерять${R}"
+    echo "  ${DIM}неделю. Тестовый CA лимитов не имеет, но браузер будет${R}"
+    echo "  ${DIM}предупреждать — как со своим сертификатом.${R}"
+    if confirm "Это пробная установка, использовать тестовый CA?" "нет"; then
+        ACME_CA="$ACME_CA_STAGING"
+        warn "Включён тестовый CA — сертификат будет недоверенным."
+        info "Для боевого запуска уберите ACME_CA из .env и перезапустите caddy."
+    fi
+}
+
+collect_settings() {
+    step "Настройки"
+
+    # Значения по умолчанию задаём до всех ветвлений: при повторном запуске
+    # часть вопросов не задаётся, а переменные всё равно читаются дальше,
+    # и под set -u это было бы падением.
+    REUSE_ENV=0
+    MONITORING=0
+    FETCH_HLS=0
+    SETUP_FIREWALL=0
+    ACCESS_MODE=domain
+    ACME_CA=""
+
+    if [ -f .env ]; then
+        warn "Файл .env уже существует."
+        if confirm "Использовать его и не спрашивать настройки заново?" "да"; then
+            # shellcheck disable=SC1091
+            set -a; . ./.env; set +a
+            REUSE_ENV=1
+            if [ -n "${GRAFANA_PASSWORD:-}" ]; then
+                MONITORING=1
+            fi
+            [ "${TLS_ISSUER:-}" = "internal" ] && ACCESS_MODE=selfsigned
+            ok "Использую существующий .env (адрес: ${DOMAIN:-не задан})"
+            [ -n "${DOMAIN:-}" ] || die "в .env не задан DOMAIN. Удалите файл и запустите скрипт заново."
+            [ -n "${TLS_ISSUER:-}" ] || die "в .env не задан TLS_ISSUER (почта или слово internal)."
+            ask_remaining
+            return 0
+        fi
+        cp -a .env ".env.backup-$(date +%Y%m%d-%H%M%S)"
+        info "Старый .env сохранён рядом с суффиксом .backup-*"
+    fi
+
+    ask_address
 
     echo
     choose TOTP_POLICY "Кому обязателен второй фактор (2FA)?" \
@@ -394,9 +524,10 @@ write_env() {
     cat > .env <<ENV
 # Сгенерировано install.sh $(date -Is)
 
-# ─── Домен и TLS ────────────────────────────────────────────────────────────
+# ─── Адрес и TLS ────────────────────────────────────────────────────────────
+# TLS_ISSUER: почта → сертификат Let's Encrypt; internal → собственный CA.
 DOMAIN=${DOMAIN}
-ACME_EMAIL=${ACME_EMAIL}
+TLS_ISSUER=${TLS_ISSUER}
 PUBLIC_HOST=${PUBLIC_HOST}
 
 # ─── База данных ────────────────────────────────────────────────────────────
@@ -421,6 +552,11 @@ TOTP_POLICY=${TOTP_POLICY}
 ALLOW_PRIVATE_CAMERA_HOSTS=false
 CAMERA_HOST_ALLOWLIST=
 ENV
+
+    if [ -n "${ACME_CA:-}" ]; then
+        printf '\n# Тестовый CA: сертификат недоверенный, зато без недельных лимитов.\nACME_CA=%s\n' \
+            "$ACME_CA" >> .env
+    fi
 
     if [ "$MONITORING" = "1" ]; then
         printf '\n# ─── Мониторинг ─────────────────────────────────────────────────────────────\nGRAFANA_PASSWORD=%s\n' \
@@ -624,10 +760,13 @@ create_admin() {
 # Итог
 # ─────────────────────────────────────────────────────────────────────────────
 final_check() {
-    local url="https://${DOMAIN}/healthz" body="" tries=0
+    local url="https://${DOMAIN}/healthz" body="" tries=0 insecure=()
+    # В режиме своего CA curl не знает нашего корневого сертификата — здесь
+    # проверяется доступность сервиса, а не доверие к цепочке.
+    [ "${TLS_ISSUER:-}" = "internal" ] && insecure=(--insecure)
     printf '\n  %sПроверяю, что панель отвечает…%s ' "$DIM" "$R"
     while [ "$tries" -lt 12 ]; do
-        body="$(curl -fsS --max-time 5 "$url" 2>/dev/null || true)"
+        body="$(curl -fsS "${insecure[@]}" --max-time 5 "$url" 2>/dev/null || true)"
         if [ "$body" = "ok" ]; then
             break
         fi
@@ -667,6 +806,21 @@ ART
         echo "  Обычно это значит, что Let's Encrypt ещё выпускает сертификат"
         echo "  (до минуты) или DNS не успел разойтись. Проверьте:"
         echo "    ${B}docker compose logs -f caddy${R}"
+    fi
+
+    if [ "${TLS_ISSUER:-}" = "internal" ]; then
+        echo
+        printf '  %sСертификат выпущен собственным CA.%s\n' "$B$YLW" "$R"
+        echo "  Браузер будет предупреждать при каждом заходе, пока корневой"
+        echo "  сертификат не установлен. Забрать его:"
+        echo
+        echo "    ${B}docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./rtspgw-ca.crt${R}"
+        echo
+        echo "  Дальше файл ${B}rtspgw-ca.crt${R} нужно установить в доверенные"
+        echo "  корневые центры на машинах тех, кто будет смотреть камеры."
+        echo "  ${DIM}Если ссылки нужно раздавать людям вне компании — лучше${R}"
+        echo "  ${DIM}перевыпустить на домен или на sslip.io: тогда предупреждений${R}"
+        echo "  ${DIM}не будет вовсе. Достаточно поправить DOMAIN и TLS_ISSUER в .env.${R}"
     fi
 
     echo

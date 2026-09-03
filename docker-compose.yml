@@ -30,8 +30,12 @@ services:
       - "443:443"
       - "443:443/udp"
     environment:
-      DOMAIN: ${DOMAIN}
-      ACME_EMAIL: ${ACME_EMAIL}
+      DOMAIN: ${DOMAIN:?задайте DOMAIN в .env}
+      # Почта для Let's Encrypt либо слово internal — см. .env.example.
+      TLS_ISSUER: ${TLS_ISSUER:?задайте TLS_ISSUER в .env}
+      # Значение по умолчанию подставляется здесь, а не в Caddyfile: так
+      # старые .env без этой переменной продолжают работать.
+      ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

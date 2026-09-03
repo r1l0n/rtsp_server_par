@@ -149,6 +149,38 @@ def test_caddy_media_matchers_accept_generated_path_names(caddyfile: str) -> Non
         assert any(re.fullmatch(p, sample) for p in patterns), f"не проходит матчер: {sample}"
 
 
+def test_tls_issuer_is_configurable(caddyfile: str, compose: dict) -> None:
+    """Один токен покрывает и Let's Encrypt, и собственный CA.
+
+    `tls <почта>` — сертификат от Let's Encrypt (есть домен или имя sslip.io);
+    `tls internal` — свой CA (когда наружу торчит только IP-адрес).
+    Значение приходит из .env, поэтому режим меняется без правки конфигов.
+    """
+    assert "tls {$TLS_ISSUER}" in caddyfile
+    # Глобальной директивы email быть не должно: в режиме internal почты нет,
+    # и Caddy упал бы на пустом аргументе.
+    assert "email {$" not in caddyfile
+
+    env = compose["services"]["caddy"]["environment"]
+    assert "TLS_ISSUER" in env
+    assert "DOMAIN" in env
+
+
+def test_acme_ca_defaults_to_production(caddyfile: str, compose: dict) -> None:
+    """Тестовый CA включается через .env, но по умолчанию — боевой.
+
+    Значение по умолчанию задаётся в compose, а не в Caddyfile: так .env,
+    написанные до появления этой переменной, продолжают работать, и Caddy
+    никогда не получает пустой аргумент.
+    """
+    assert "acme_ca {$ACME_CA}" in caddyfile
+
+    acme_ca = compose["services"]["caddy"]["environment"]["ACME_CA"]
+    assert acme_ca.startswith("${ACME_CA:-")
+    assert "acme-v02.api.letsencrypt.org" in acme_ca
+    assert "staging" not in acme_ca
+
+
 def test_caddy_blocks_service_endpoints(caddyfile: str) -> None:
     """Метрики и readyz не должны быть доступны из интернета."""
     assert re.search(r"handle /metrics \{\s*respond 404", caddyfile)

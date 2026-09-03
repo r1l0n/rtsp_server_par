@@ -94,6 +94,33 @@ check_false "отклоняет пробел"                is_email "admin @co
 check_false "отклоняет без домена верхнего"   is_email "admin@company"
 
 echo
+echo "── Разбор IP-адресов ───────────────────────────────────────────────"
+check_true  "принимает публичный IPv4"    is_ipv4 "31.148.246.249"
+check_true  "принимает 0 в октете"        is_ipv4 "203.0.113.10"
+check_false "отклоняет октет > 255"       is_ipv4 "256.1.1.1"
+check_false "отклоняет три октета"        is_ipv4 "10.0.1"
+check_false "отклоняет домен"             is_ipv4 "cam.company.ru"
+check_false "отклоняет IPv6"              is_ipv4 "2001:db8::1"
+check_false "отклоняет адрес с портом"    is_ipv4 "10.0.0.1:554"
+
+check_true  "10.x — приватный"            is_private_ipv4 "10.1.2.3"
+check_true  "192.168.x — приватный"       is_private_ipv4 "192.168.0.10"
+check_true  "172.16.x — приватный"        is_private_ipv4 "172.16.5.4"
+check_true  "172.31.x — приватный"        is_private_ipv4 "172.31.255.1"
+check_true  "127.x — приватный"           is_private_ipv4 "127.0.0.1"
+check_true  "169.254.x — приватный"       is_private_ipv4 "169.254.169.254"
+check_true  "100.64.x — CGNAT"            is_private_ipv4 "100.64.0.1"
+check_false "172.32.x — уже публичный"    is_private_ipv4 "172.32.0.1"
+check_false "публичный IP камеры"         is_private_ipv4 "31.148.246.249"
+check_false "8.8.8.8 — публичный"         is_private_ipv4 "8.8.8.8"
+
+echo
+echo "── Имя sslip.io из IP ──────────────────────────────────────────────"
+check "адрес превращается в имя" "203-0-113-10.sslip.io" "$(sslip_name 203.0.113.10)"
+check "реальный IP камеры"       "31-148-246-249.sslip.io" "$(sslip_name 31.148.246.249)"
+check_true "полученное имя проходит проверку домена" matches "$(sslip_name 203.0.113.10)"
+
+echo
 echo "── Генератор паролей ───────────────────────────────────────────────"
 pw="$(random_alnum 32)"
 pw16="$(random_alnum 16)"
@@ -141,7 +168,7 @@ cd "$TMP" || exit 1
 REUSE_ENV=0
 MONITORING=0
 DOMAIN="cam.company.ru"
-ACME_EMAIL="admin@company.ru"
+TLS_ISSUER="admin@company.ru"
 PUBLIC_HOST="cam.company.ru"
 POSTGRES_PASSWORD="TestPassword123456"
 TOTP_POLICY="admins"
@@ -152,6 +179,7 @@ write_env >/dev/null 2>&1
 
 check_true "файл .env создан" test -s .env
 check "домен записан"        "DOMAIN=cam.company.ru"           "$(grep '^DOMAIN=' .env)"
+check "выдающий сертификат"  "TLS_ISSUER=admin@company.ru"     "$(grep '^TLS_ISSUER=' .env)"
 check "политика 2FA"         "TOTP_POLICY=admins"              "$(grep '^TOTP_POLICY=' .env)"
 check "ключ берётся из файла" "APP_SECRET_KEY_FILE=/run/secrets/app_key" "$(grep '^APP_SECRET_KEY_FILE=' .env)"
 check "cookie только по https" "SESSION_COOKIE_SECURE=true"    "$(grep '^SESSION_COOKIE_SECURE=' .env)"
@@ -180,6 +208,40 @@ check "с мониторингом пароль grafana есть" "GRAFANA_PASSW
     "$(grep '^GRAFANA_PASSWORD=' .env)"
 
 echo
+echo "── Режим «только IP, свой сертификат» ──────────────────────────────"
+MONITORING=0
+DOMAIN="203.0.113.10"
+TLS_ISSUER="internal"
+PUBLIC_HOST="203.0.113.10"
+rm -f .env
+write_env >/dev/null 2>&1
+check "адресом служит IP"        "DOMAIN=203.0.113.10"    "$(grep '^DOMAIN=' .env)"
+check "сертификат свой"          "TLS_ISSUER=internal"    "$(grep '^TLS_ISSUER=' .env)"
+check "WebRTC отдаёт тот же IP"  "PUBLIC_HOST=203.0.113.10" "$(grep '^PUBLIC_HOST=' .env)"
+# Cookie остаются Secure: соединение всё равно https, пусть и со своим CA.
+check "cookie остаются Secure"   "SESSION_COOKIE_SECURE=true" \
+    "$(grep '^SESSION_COOKIE_SECURE=' .env)"
+
+echo
+echo "── Тестовый CA Let's Encrypt ───────────────────────────────────────"
+MONITORING=0
+DOMAIN="cam.company.ru"
+TLS_ISSUER="admin@company.ru"
+PUBLIC_HOST="cam.company.ru"
+ACME_CA=""
+rm -f .env
+write_env >/dev/null 2>&1
+check "по умолчанию строки нет" "" "$(grep '^ACME_CA=' .env || true)"
+
+ACME_CA="$ACME_CA_STAGING"
+rm -f .env
+write_env >/dev/null 2>&1
+check "тестовый CA записывается" \
+    "ACME_CA=https://acme-staging-v02.api.letsencrypt.org/directory" \
+    "$(grep '^ACME_CA=' .env)"
+ACME_CA=""
+
+echo
 echo "── Набор compose-файлов ────────────────────────────────────────────"
 MONITORING=0
 check "без мониторинга — один файл" "-f docker-compose.yml" "$(compose_files)"
@@ -195,6 +257,37 @@ write_env >/dev/null 2>&1
 check "содержимое не изменилось" "$before" "$(cat .env)"
 
 cd "$ROOT" || exit 1
+
+echo
+echo "── Скрипт удаления ─────────────────────────────────────────────────"
+# shellcheck disable=SC1091
+source "$ROOT/uninstall.sh"
+
+check "пустой список — ноль"      "0" "$(count_of "")"
+check "три строки — три"          "3" "$(count_of "$(printf 'a\nb\nc')")"
+check "одна строка — одна"        "1" "$(count_of "one")"
+
+MODE=""; ASSUME_YES=0; REMOVE_BACKUPS=0; REMOVE_BASE_IMAGES=0
+parse_args --reset -y
+check "флаг --reset"              "reset" "$MODE"
+check "флаг -y"                   "1"     "$ASSUME_YES"
+
+MODE=""; ASSUME_YES=0; REMOVE_BACKUPS=0; REMOVE_BASE_IMAGES=0
+parse_args --purge --backups --base-images
+check "флаг --purge"              "purge" "$MODE"
+check "флаг --backups"            "1"     "$REMOVE_BACKUPS"
+check "флаг --base-images"        "1"     "$REMOVE_BASE_IMAGES"
+check "без -y подтверждения нужны" "0"    "$ASSUME_YES"
+
+check_false "неизвестный флаг отвергается" \
+    bash "$ROOT/uninstall.sh" --что-то-не-то
+check_true  "--help завершается успешно" \
+    bash "$ROOT/uninstall.sh" --help
+
+# Резервные копии — данные пользователя, случайно удалить их нельзя.
+MODE=""; REMOVE_BACKUPS=0
+parse_args --full
+check "по умолчанию бэкапы не трогаются" "0" "$REMOVE_BACKUPS"
 
 echo
 if [ "$SKIP" -gt 0 ]; then
