@@ -628,7 +628,9 @@ final_check() {
     printf '\n  %sПроверяю, что панель отвечает…%s ' "$DIM" "$R"
     while [ "$tries" -lt 12 ]; do
         body="$(curl -fsS --max-time 5 "$url" 2>/dev/null || true)"
-        [ "$body" = "ok" ] && break
+        if [ "$body" = "ok" ]; then
+            break
+        fi
         tries=$((tries + 1))
         sleep 5
     done
@@ -709,4 +711,9 @@ main() {
     summary
 }
 
-main "$@"
+# Запускаемся только при прямом вызове: при `source install.sh` файл отдаёт
+# свои функции, не выполняя установку. На этом держатся тесты в
+# tests/test_install_sh.sh.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

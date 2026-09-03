@@ -40,12 +40,24 @@
 
 ## Быстрый старт
 
+На чистом сервере достаточно одной команды — установщик спросит домен, почту
+и остальное, поставит Docker, сгенерирует секреты и поднимет всё сам:
+
+```bash
+sudo bash install.sh
+```
+
+Повторный запуск безопасен: существующий `.env` можно оставить, а ключ
+шифрования не перезаписывается никогда.
+
+Если хочется руками:
+
 ```bash
 cp .env.example .env && $EDITOR .env
 ```
 
 ```bash
-docker compose run --rm --no-deps api python -m app.cli gen-key > secrets/app_key
+openssl rand -base64 32 > secrets/app_key && chmod 600 secrets/app_key
 ```
 
 ```bash
@@ -72,10 +84,18 @@ cd backend && .venv/bin/python -m pytest -q && .venv/bin/python -m ruff check ap
 Тесты не требуют ни базы, ни Redis: Redis подменяется на in-memory, а схема
 БД сверяется с миграциями офлайн, через рендер SQL.
 
+Установщик тоже покрыт тестами — они проверяют разбор ввода и генерацию `.env`
+без сервера и без docker:
+
+```bash
+bash tests/test_install_sh.sh
+```
+
 ## Состав
 
 | Путь | Что |
 |---|---|
+| `install.sh` | интерактивная установка на чистый сервер |
 | `docker-compose.yml` | caddy, mediamtx, api, worker, postgres, redis |
 | `Caddyfile` | TLS, forward_auth, маршрутизация медиа |
 | `mediamtx/mediamtx.yml` | глобальные настройки медиа-сервера (пути — динамические) |
