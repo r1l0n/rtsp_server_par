@@ -54,22 +54,17 @@ def build_path_conf(camera: Camera, rtsp_url: str, *, close_after: int = 60) -> 
     }
 
 
-def conf_differs(current: dict[str, Any], wanted: dict[str, Any]) -> bool:
-    """Отличается ли конфигурация пути в MediaMTX от желаемой.
+def conf_diff(current: dict[str, Any], wanted: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
+    """Расхождения по ключам: {ключ: (в MediaMTX, у нас)}.
 
-    Сравниваем ТОЛЬКО заданные нами ключи. Всё остальное в ответе Control API —
-    собственные значения по умолчанию MediaMTX, и разъехаться они не могут:
-    путь всегда пишется через `replace`, который сбрасывает незаданные поля
-    к тем же самым умолчаниям.
-
-    Здесь была ошибка, из-за которой сервис не работал вовсе: код дополнительно
-    считал изменением «ключа нет в желаемом состоянии, а в MediaMTX он
-    непустой». Под это условие всегда попадали умолчания самого MediaMTX
-    (`runOnDemandStartTimeout: 10s`, `rtspTransport: tcp`), поэтому каждый путь
-    переписывался каждые 15 секунд, медиа-сервер на каждую запись перечитывал
-    конфигурацию целиком, а его лог состоял из одних «reloading configuration».
+    Нужна для лога: «путь обновлён» без указания причины не позволяет отличить
+    осмысленное изменение от бесконечной перезаписи вхолостую.
     """
-    return any(current.get(key) != value for key, value in wanted.items())
+    return {
+        key: (current.get(key), value)
+        for key, value in wanted.items()
+        if current.get(key) != value
+    }
 
 
 def _ffmpeg_command(camera: Camera, rtsp_url: str) -> str:
@@ -99,6 +94,11 @@ def _ffmpeg_command(camera: Camera, rtsp_url: str) -> str:
         "-g", "30",
         "-sc_threshold", "0",
         *audio,
+        # RTSP-сервер MediaMTX слушает только TCP (rtspTransports: [tcp]).
+        # Без этой опции ffmpeg сначала пробует UDP, получает
+        # «461 Unsupported Transport» и переподключается — лишний круг
+        # и мусорная строка в логе при каждом старте потока.
+        "-rtsp_transport", "tcp",
         "-f", "rtsp",
         f"rtsp://127.0.0.1:8554/{camera.mtx_path}",
     ]

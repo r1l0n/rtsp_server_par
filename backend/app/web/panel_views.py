@@ -18,7 +18,13 @@ from ..auth.deps import CsrfProtected, CurrentUser, DbSession, Forbidden
 from ..auth.passwords import hash_password
 from ..config import get_settings
 from ..crypto import DecryptionError, generate_token, get_cipher, hash_token
-from ..internal.authz import drop_link_viewers, invalidate_link
+from ..internal.authz import (
+    VIEW_COOKIE,
+    drop_link_viewers,
+    grant_operator,
+    invalidate_link,
+    new_viewer_id,
+)
 from ..logging_setup import get_logger
 from ..media.diagnose import diagnose
 from ..media.mtx_client import MediaMTXError, get_mtx
@@ -427,6 +433,48 @@ async def camera_set_profile(
         log.warning("push_failed", camera_id=str(camera.id), error=str(exc))
 
     return redirect(f"/cameras/{camera.id}?notice=profile_changed")
+
+
+#: Просмотр из панели живёт минуты: это инструмент проверки, а не способ
+#: смотреть камеру без ссылки.
+OPERATOR_VIEW_TTL_SECONDS = 15 * 60
+
+
+@router.get("/cameras/{camera_id}/live", response_class=HTMLResponse)
+async def camera_live(
+    request: Request, db: DbSession, user: CurrentUser, camera_id: uuid.UUID
+) -> HTMLResponse:
+    """Плеер для оператора: та же цепочка Caddy → forward_auth → MediaMTX,
+    что и у зрителя, но без публичной ссылки и токена.
+
+    Нужен, чтобы разделить два совершенно разных отказа. Если здесь картинка
+    есть, а по публичной ссылке нет — сломана выдача доступа по ссылке.
+    Если нет и здесь — дело в медиа-тракте, и это видно в отчёте диагностики.
+    """
+    camera = await _get_camera(db, camera_id, user)
+
+    viewer_id = request.cookies.get(VIEW_COOKIE) or new_viewer_id()
+    await grant_operator(viewer_id, camera.mtx_path, OPERATOR_VIEW_TTL_SECONDS)
+
+    response = render(
+        request,
+        "player.html",
+        user=user,
+        camera_name=f"{camera.name} — просмотр из панели",
+        whep_url=f"/whep/{camera.mtx_path}/whep",
+        hls_url=f"/hls/{camera.mtx_path}/index.m3u8",
+        audio_enabled=camera.audio_enabled,
+    )
+    response.set_cookie(
+        VIEW_COOKIE,
+        viewer_id,
+        max_age=OPERATOR_VIEW_TTL_SECONDS,
+        httponly=True,
+        secure=get_settings().session_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+    return response
 
 
 @router.get("/cameras/{camera_id}/snapshot.jpg")

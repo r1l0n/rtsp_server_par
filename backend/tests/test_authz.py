@@ -7,7 +7,14 @@ import uuid
 import pytest
 
 from app.internal import authz
-from app.internal.authz import VIEW_COOKIE, count_viewers, grant, ip_allowed, new_viewer_id
+from app.internal.authz import (
+    VIEW_COOKIE,
+    count_viewers,
+    grant,
+    grant_operator,
+    ip_allowed,
+    new_viewer_id,
+)
 
 MTX_PATH = "abcdefgh12345678abcdefgh"
 
@@ -163,3 +170,52 @@ def test_ip_filter_rejects_unparsable_address() -> None:
 
 def test_ip_filter_skips_broken_cidr_but_honours_valid_one() -> None:
     assert ip_allowed("203.0.113.7", ["мусор", "203.0.113.0/24"])
+
+
+# ─── Просмотр оператором из панели ───────────────────────────────────────────
+async def test_operator_grant_opens_the_path_without_a_link(deny_all_links) -> None:
+    """Публичной ссылки нет, проверять нечего — доступ выдаётся сам по себе.
+
+    deny_all_links здесь важен: он доказывает, что операторский доступ идёт
+    мимо проверки ссылок, а не опирается на неё.
+    """
+    viewer_id = new_viewer_id()
+    await grant_operator(viewer_id, MTX_PATH, 900)
+
+    with _client() as client:
+        response = _authz(client, f"/whep/{MTX_PATH}/whep", {VIEW_COOKIE: viewer_id})
+
+    assert response.status_code == 200
+    assert response.headers["X-Mtx-Path"] == MTX_PATH
+
+
+async def test_operator_grant_covers_only_its_own_path() -> None:
+    """Ключ выдан на конкретный путь и на соседний доступ не распространяется."""
+    viewer_id = new_viewer_id()
+    await grant_operator(viewer_id, MTX_PATH, 900)
+
+    with _client() as client:
+        response = _authz(client, "/hls/zzzzzzzz11112222zzzzzzzz/index.m3u8",
+                          {VIEW_COOKIE: viewer_id})
+
+    assert response.status_code == 403
+
+
+async def test_watching_extends_the_grant(allow_all_links, fake_redis) -> None:
+    """Доступ не должен протухать посреди просмотра.
+
+    Ставим ключу почти истёкший TTL и убеждаемся, что успешная проверка
+    вернула его к полному сроку: раньше зритель получал 403 ровно через час
+    после открытия ссылки, прямо во время трансляции.
+    """
+    from app.config import get_settings
+
+    viewer_id = new_viewer_id()
+    await grant(viewer_id, MTX_PATH, uuid.uuid4(), 30)
+
+    with _client() as client:
+        assert _authz(client, f"/hls/{MTX_PATH}/index.m3u8",
+                      {VIEW_COOKIE: viewer_id}).status_code == 200
+
+    ttl = await fake_redis.ttl(f"viewer:{viewer_id}")
+    assert ttl > get_settings().view_cookie_ttl_minutes * 60 - 10

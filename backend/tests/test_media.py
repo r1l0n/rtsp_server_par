@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-from app.media.paths import build_path_conf, conf_differs, new_mtx_path
+from app.media.paths import build_path_conf, conf_diff, new_mtx_path
 from app.media.probe import _interpret
 from app.models import Camera, StreamProfile
 
@@ -106,7 +106,7 @@ def test_unchanged_path_is_never_rewritten(profile: StreamProfile) -> None:
     ни в transcode.
     """
     wanted = build_path_conf(_camera(profile=profile), "rtsp://203.0.113.5/s")
-    assert conf_differs(_as_mediamtx_returns_it(wanted), wanted) is False
+    assert conf_diff(_as_mediamtx_returns_it(wanted), wanted) == {}
 
 
 def test_real_change_is_still_detected_against_a_full_api_response() -> None:
@@ -114,24 +114,26 @@ def test_real_change_is_still_detected_against_a_full_api_response() -> None:
     current = _as_mediamtx_returns_it(
         build_path_conf(_camera(), "rtsp://203.0.113.5/old")
     )
-    assert conf_differs(current, wanted) is True
+    assert set(conf_diff(current, wanted)) == {"source"}
 
 def test_identical_config_is_not_a_change() -> None:
     wanted = build_path_conf(_camera(), "rtsp://203.0.113.5/s")
     current = {**wanted, "someOtherMediaMtxDefault": 123}
-    assert conf_differs(current, wanted) is False
+    assert conf_diff(current, wanted) == {}
 
 
 def test_changed_source_is_detected() -> None:
     wanted = build_path_conf(_camera(), "rtsp://203.0.113.5/new")
     current = build_path_conf(_camera(), "rtsp://203.0.113.5/old")
-    assert conf_differs(current, wanted) is True
+    assert set(conf_diff(current, wanted)) == {"source"}
 
 
 def test_switch_to_transcode_is_detected() -> None:
+    """Смена профиля меняет и источник, и весь набор runOnDemand-ключей."""
     wanted = build_path_conf(_camera(profile=StreamProfile.transcode), "rtsp://203.0.113.5/s")
     current = build_path_conf(_camera(), "rtsp://203.0.113.5/s")
-    assert conf_differs(current, wanted) is True
+    changed = set(conf_diff(current, wanted))
+    assert {"source", "runOnDemand"} <= changed
 
 
 # ─── Разбор ffprobe ──────────────────────────────────────────────────────────

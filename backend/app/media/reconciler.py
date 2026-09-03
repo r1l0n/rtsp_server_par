@@ -24,7 +24,7 @@ from ..crypto import DecryptionError, get_cipher
 from ..logging_setup import get_logger
 from ..models import Camera, CameraStatus
 from .mtx_client import MediaMTXClient, MediaMTXError, PathNotFound
-from .paths import build_path_conf
+from .paths import build_path_conf, conf_diff
 
 log = get_logger("reconciler")
 
@@ -62,24 +62,6 @@ async def desired_state(
     return desired
 
 
-def _differs(current: dict[str, Any], wanted: dict[str, Any]) -> bool:
-    """Сравниваем ТОЛЬКО те ключи, которые задаём сами.
-
-    Всё остальное в ответе Control API — собственные значения по умолчанию
-    MediaMTX, и они не могут «разъехаться»: путь мы всегда пишем через
-    `replace`, а он сбрасывает незаданные поля к тем же самым умолчаниям.
-
-    Раньше здесь была вторая ветка: «ключ пропал из желаемого состояния, а в
-    MediaMTX он непустой — значит изменилось». Она сравнивала умолчания
-    MediaMTX (`runOnDemandStartTimeout: 10s`, `rtspTransport: tcp`) с
-    заглушкой из пустых значений и срабатывала ВСЕГДА. Реконсилятор
-    переписывал каждый путь каждые 15 секунд, MediaMTX на каждую запись
-    перечитывал конфигурацию целиком, и его лог состоял из одних
-    «reloading configuration» — в котором тонули настоящие ошибки источников.
-    """
-    return any(current.get(key) != value for key, value in wanted.items())
-
-
 async def reconcile(session: AsyncSession, mtx: MediaMTXClient) -> ReconcileReport:
     settings = get_settings()
     report = ReconcileReport()
@@ -93,9 +75,17 @@ async def reconcile(session: AsyncSession, mtx: MediaMTXClient) -> ReconcileRepo
             if name not in current:
                 await mtx.add_path(name, conf)
                 report.added.append(name)
-            elif _differs(current[name], conf):
+            elif diff := conf_diff(current[name], conf):
                 await mtx.replace_path(name, conf)
                 report.updated.append(name)
+                # Каждая перезапись заставляет MediaMTX перечитать конфигурацию
+                # целиком, поэтому фиксируем, ради чего это сделано: «путь
+                # обновлён» без причины не отличить от перезаписи вхолостую.
+                log.info(
+                    "path_updated",
+                    mtx_path=name,
+                    changed={k: {"mtx": v[0], "want": v[1]} for k, v in diff.items()},
+                )
         except MediaMTXError as exc:
             report.failed.append((name, str(exc)))
 

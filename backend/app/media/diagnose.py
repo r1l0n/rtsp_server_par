@@ -31,7 +31,7 @@ from ..config import get_settings
 from ..logging_setup import get_logger
 from ..models import Camera, StreamProfile
 from .mtx_client import MediaMTXClient, MediaMTXError, PathNotFound
-from .paths import build_path_conf, conf_differs
+from .paths import build_path_conf, conf_diff
 from .probe import WEBRTC_AUDIO_CODECS, WEBRTC_VIDEO_CODECS, ProbeResult, probe_rtsp
 from .snapshot import grab_frame
 from .ssrf import strip_credentials
@@ -297,7 +297,7 @@ async def _check_path_config(
     except MediaMTXError as exc:
         return FAIL, f"Control API недоступен: {exc}", "проверьте контейнер mediamtx"
 
-    if current is not None and not conf_differs(current, wanted):
+    if current is not None and not conf_diff(current, wanted):
         return OK, f"путь {camera.mtx_path} настроен и совпадает с ожидаемым", ""
 
     try:

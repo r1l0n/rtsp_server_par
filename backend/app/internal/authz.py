@@ -35,6 +35,9 @@ log = get_logger("authz")
 router = APIRouter(tags=["internal"])
 
 VIEW_COOKIE = "rtspgw_view"
+
+#: Значение вместо id ссылки, когда камеру смотрит оператор из панели.
+OPERATOR_GRANT = "operator"
 _VIEWER_PREFIX = "viewer:"
 _LINK_CACHE_PREFIX = "authz:link:"
 _LINK_VIEWERS_PREFIX = "link_viewers:"
@@ -43,6 +46,19 @@ _LINK_VIEWERS_PREFIX = "link_viewers:"
 _MEDIA_URI = re.compile(r"^/(?:whep|hls)/([a-z0-9]{8,64})(?:/|$)")
 
 _DENY = Response(status_code=403)
+
+
+def _deny(reason: str, **context: object) -> Response:
+    """Отказ всегда с причиной в логе.
+
+    Наружу причина не уходит — снаружи 403 обязан быть неотличим от 403.
+    Но раньше четыре отказа из пяти не писали вообще ничего, и «плеер молча
+    показывает чёрный экран» было невозможно отличить от «камера не работает»:
+    в логах не было ни строчки. Теперь `docker compose logs api | grep authz`
+    отвечает на этот вопрос сразу.
+    """
+    log.info("authz_denied", reason=reason, **context)
+    return _DENY
 
 
 def new_viewer_id() -> str:
@@ -65,6 +81,21 @@ async def grant(viewer_id: str, mtx_path: str, link_id: uuid.UUID, ttl_seconds: 
     pipe.expire(viewer_key, ttl_seconds)
     pipe.sadd(link_viewers_key, viewer_id)
     pipe.expire(link_viewers_key, ttl_seconds)
+    await pipe.execute()
+
+
+async def grant_operator(viewer_id: str, mtx_path: str, ttl_seconds: int) -> None:
+    """Доступ оператора к своей камере из панели — без публичной ссылки.
+
+    Значение в хеше не id ссылки, а OPERATOR_GRANT: проверять нечего, ссылки
+    нет. Ключ живёт минуты и заводится только для камеры, которую оператору
+    и так разрешено видеть.
+    """
+    redis = get_redis()
+    key = f"{_VIEWER_PREFIX}{viewer_id}"
+    pipe = redis.pipeline()
+    pipe.hset(key, mtx_path, OPERATOR_GRANT)
+    pipe.expire(key, ttl_seconds)
     await pipe.execute()
 
 
@@ -148,35 +179,44 @@ async def authz(request: Request) -> Response:
     uri = request.headers.get("x-forwarded-uri") or request.headers.get("x-original-uri") or ""
     match = _MEDIA_URI.match(urlsplit(uri).path)
     if match is None:
-        return _DENY
+        # Сюда попадают и запросы без X-Forwarded-Uri: если Caddy почему-то
+        # не прислал заголовок, uri будет пустым, и это надо видеть.
+        return _deny("uri_not_matched", uri=uri[:200])
     mtx_path = match.group(1)
 
     viewer_id = request.cookies.get(VIEW_COOKIE)
     if not viewer_id:
-        return _DENY
+        return _deny("no_view_cookie", path=mtx_path, cookies=sorted(request.cookies))
 
     raw_link_id = await get_redis().hget(f"{_VIEWER_PREFIX}{viewer_id}", mtx_path)
     if not raw_link_id:
-        return _DENY
+        return _deny("no_grant_for_path", path=mtx_path)
+
+    if raw_link_id == OPERATOR_GRANT:
+        # Просмотр оператором из панели: публичной ссылки нет и проверять
+        # нечего. Ключ живёт минуты и создаётся только для своей камеры.
+        return await _allow(mtx_path, raw_link_id, viewer_id)
 
     try:
         link_id = uuid.UUID(raw_link_id)
     except ValueError:
-        return _DENY
+        return _deny("grant_is_not_a_link_id", path=mtx_path)
 
     if not await _link_is_valid(link_id):
-        log.info("authz_denied", path=mtx_path, link_id=str(link_id), reason="link_invalid")
-        return _DENY
+        return _deny("link_invalid", path=mtx_path, link_id=str(link_id))
 
-    # Пока зритель смотрит, доступ не должен протухать. Без продления зритель
-    # получал 403 ровно через VIEW_COOKIE_TTL после открытия ссылки — прямо
-    # посреди трансляции, и выглядело это как «плеер сломался сам по себе».
-    # Отзыв ссылки по-прежнему мгновенный: он удаляет ключ целиком.
-    ttl = get_settings().view_cookie_ttl_minutes * 60
-    await get_redis().expire(f"{_VIEWER_PREFIX}{viewer_id}", ttl)
+    return await _allow(mtx_path, str(link_id), viewer_id)
 
+
+async def _allow(mtx_path: str, link_id: str, viewer_id: str) -> Response:
     response = Response(status_code=200)
     # Caddy копирует эти заголовки в запрос к MediaMTX (copy_headers).
     response.headers["X-Mtx-Path"] = mtx_path
-    response.headers["X-Link-Id"] = str(link_id)
+    response.headers["X-Link-Id"] = link_id
+    # Пока зритель смотрит, доступ не должен протухать. Без продления он
+    # обрывался ровно через VIEW_COOKIE_TTL после открытия ссылки — посреди
+    # трансляции, и выглядело это как «плеер сломался сам по себе». Отзыв
+    # ссылки по-прежнему мгновенный: он удаляет ключ целиком.
+    ttl = get_settings().view_cookie_ttl_minutes * 60
+    await get_redis().expire(f"{_VIEWER_PREFIX}{viewer_id}", ttl)
     return response

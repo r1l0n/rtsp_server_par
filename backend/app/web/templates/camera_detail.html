@@ -29,11 +29,18 @@
 <section class="card">
   <div class="page-head">
     <h2>Диагностика</h2>
-    <form method="post" action="/cameras/{{ camera.id }}/diagnose" class="inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="primary"
-              data-busy="Проверяю камеру…">Проверить сейчас</button>
-    </form>
+    <div class="actions">
+      {# Просмотр из панели проходит ту же цепочку Caddy → forward_auth →
+         MediaMTX, что и публичная ссылка, но без токена. Если здесь картинка
+         есть, а по ссылке нет — сломана выдача доступа, а не поток. #}
+      <a class="button" href="/cameras/{{ camera.id }}/live" target="_blank"
+         rel="noopener">Смотреть из панели</a>
+      <form method="post" action="/cameras/{{ camera.id }}/diagnose" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="primary"
+                data-busy="Проверяю камеру…">Проверить сейчас</button>
+      </form>
+    </div>
   </div>
 
   {% if diagnosis %}
