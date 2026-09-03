@@ -215,6 +215,19 @@ def test_tls_issuer_is_configurable(caddyfile: str, compose: dict) -> None:
     assert "DOMAIN" in env
 
 
+def test_default_sni_is_set(caddyfile: str) -> None:
+    """Без default_sni режим «доступ по IP» не работает вообще.
+
+    Браузер, открывая https://<IP>, не шлёт SNI — RFC 6066 запрещает
+    IP-литералы в этом расширении. Без SNI Caddy ищет сертификат по локальному
+    адресу соединения, а в контейнере это адрес docker-сети, а не публичный IP.
+    Сертификат не находится, рукопожатие рвётся, браузер показывает
+    ERR_SSL_PROTOCOL_ERROR — и в access-логе Caddy при этом пусто, так что
+    причину по логам не найти.
+    """
+    assert "default_sni {$DOMAIN}" in caddyfile
+
+
 def test_acme_ca_defaults_to_production(caddyfile: str, compose: dict) -> None:
     """Тестовый CA включается через .env, но по умолчанию — боевой.
 

@@ -98,6 +98,21 @@ docker compose exec postgres psql -U rtspgw -d rtspgw -c \
 docker compose exec -it api python -m app.cli reset-password --email user@company.ru
 ```
 
+### Браузер показывает ERR_SSL_PROTOCOL_ERROR
+
+Смотрите в access-лог Caddy: если запросов на 443 там **нет вообще**, значит
+соединение рвётся на TLS-рукопожатии, до HTTP. Проверить напрямую:
+
+```bash
+openssl s_client -connect <адрес>:443 -servername <адрес> </dev/null 2>&1 | head -20
+```
+
+Если с `-servername` рукопожатие проходит, а без него — нет, то Caddy не может
+подобрать сертификат при отсутствии SNI. Так бывает при доступе по IP: браузер
+не кладёт IP-литерал в SNI, а Caddy внутри контейнера видит только адрес
+docker-сети. Лечится глобальной опцией `default_sni {$DOMAIN}` в `Caddyfile` —
+она уже там; если её убрали, верните.
+
 ### Удаление и повторная установка
 
 Для тестовых прогонов — когда нужно попробовать разные способы поднятия, не

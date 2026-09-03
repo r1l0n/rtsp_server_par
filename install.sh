@@ -856,8 +856,14 @@ ART
     if [ "$healthy" != "1" ]; then
         echo
         warn "Панель пока не ответила по https."
-        echo "  Обычно это значит, что Let's Encrypt ещё выпускает сертификат"
-        echo "  (до минуты) или DNS не успел разойтись. Проверьте:"
+        if [ "${TLS_ISSUER:-}" = "internal" ]; then
+            echo "  Сертификат выпускается локально и мгновенно, так что ждать нечего —"
+            echo "  смотрите логи. Быстрая проверка TLS-рукопожатия:"
+            echo "    ${B}openssl s_client -connect ${DOMAIN}:443 -servername ${DOMAIN} </dev/null${R}"
+        else
+            echo "  Обычно это значит, что Let's Encrypt ещё выпускает сертификат"
+            echo "  (до минуты) или DNS не успел разойтись."
+        fi
         echo "    ${B}docker compose logs -f caddy${R}"
     fi
 
