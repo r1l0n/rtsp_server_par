@@ -312,7 +312,7 @@ remove_files() {
 remove_firewall() {
     step "Правила файрвола"
 
-    if ! agree "Убрать правила для 80/tcp, 443/tcp и 8189/udp?" "да"; then
+    if ! agree "Убрать правила для 80/tcp, 443/tcp, 8189/udp и 8189/tcp?" "да"; then
         info "Правила оставлены."
         return 0
     fi
@@ -323,11 +323,13 @@ remove_firewall() {
         ufw delete allow 80/tcp   >/dev/null 2>&1 || true
         ufw delete allow 443/tcp  >/dev/null 2>&1 || true
         ufw delete allow 8189/udp >/dev/null 2>&1 || true
+        ufw delete allow 8189/tcp >/dev/null 2>&1 || true
         ok "ufw: правила сервиса убраны (SSH не тронут)"
     elif command -v firewall-cmd >/dev/null 2>&1; then
         firewall-cmd --permanent --remove-port=80/tcp   >/dev/null 2>&1 || true
         firewall-cmd --permanent --remove-port=443/tcp  >/dev/null 2>&1 || true
         firewall-cmd --permanent --remove-port=8189/udp >/dev/null 2>&1 || true
+        firewall-cmd --permanent --remove-port=8189/tcp >/dev/null 2>&1 || true
         firewall-cmd --reload >/dev/null 2>&1 || true
         ok "firewalld: правила сервиса убраны (SSH не тронут)"
     else

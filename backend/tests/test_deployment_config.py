@@ -38,16 +38,21 @@ def caddyfile() -> str:
 
 
 # ─── Периметр ────────────────────────────────────────────────────────────────
-def test_only_three_ports_are_published(compose: dict) -> None:
-    """Наружу — только 80, 443 и 8189/udp. Всё остальное внутри docker."""
+def test_only_expected_ports_are_published(compose: dict) -> None:
+    """Наружу — только 80, 443 и 8189. Всё остальное внутри docker.
+
+    8189 опубликован и по UDP, и по TCP: UDP — основной путь WebRTC-медиа,
+    TCP — ICE-кандидат для сетей, где исходящий UDP закрыт. Без TCP там
+    WebRTC не поднимается вообще, и зритель молча уезжает на HLS.
+    """
     published: set[str] = set()
     for service in compose["services"].values():
         for mapping in service.get("ports", []):
             host_part = str(mapping).split(":")[0]
-            proto = "/udp" if str(mapping).endswith("/udp") else ""
+            proto = "/udp" if str(mapping).endswith("/udp") else "/tcp"
             published.add(host_part + proto)
 
-    assert published == {"80", "443", "443/udp", "8189/udp"}
+    assert published == {"80/tcp", "443/tcp", "443/udp", "8189/udp", "8189/tcp"}
 
 
 def test_redis_command_uses_space_separated_options(compose: dict) -> None:
@@ -175,10 +180,16 @@ def test_webrtc_advertises_public_host_not_container_ip(mediamtx: dict, compose:
     assert "MTX_WEBRTCADDITIONALHOSTS" in env
 
 
-def test_webrtc_udp_port_matches_published_port(mediamtx: dict, compose: dict) -> None:
-    port = mediamtx["webrtcLocalUDPAddress"].lstrip(":")
+def test_webrtc_ports_match_published_ports(mediamtx: dict, compose: dict) -> None:
+    """И UDP, и TCP-кандидат должны быть выставлены наружу на своих портах."""
     published = [str(p) for p in compose["services"]["mediamtx"]["ports"]]
-    assert any(p.startswith(f"{port}:{port}") for p in published)
+
+    udp = mediamtx["webrtcLocalUDPAddress"].lstrip(":")
+    assert f"{udp}:{udp}/udp" in published
+
+    tcp = mediamtx["webrtcLocalTCPAddress"].lstrip(":")
+    assert tcp, "ICE поверх TCP обязателен: без него WebRTC не работает там, где закрыт UDP"
+    assert f"{tcp}:{tcp}/tcp" in published
 
 
 # ─── Caddyfile ↔ имена путей ─────────────────────────────────────────────────

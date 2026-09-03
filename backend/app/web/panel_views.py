@@ -16,9 +16,10 @@ from .. import audit
 from ..auth.deps import CsrfProtected, CurrentUser, DbSession, Forbidden
 from ..auth.passwords import hash_password
 from ..config import get_settings
-from ..crypto import generate_token, get_cipher, hash_token
+from ..crypto import DecryptionError, generate_token, get_cipher, hash_token
 from ..internal.authz import drop_link_viewers, invalidate_link
 from ..logging_setup import get_logger
+from ..media.diagnose import diagnose
 from ..media.mtx_client import MediaMTXError, get_mtx
 from ..media.paths import new_mtx_path
 from ..media.reconciler import drop_path, push_camera
@@ -145,11 +146,11 @@ async def camera_create(
     return redirect(f"/cameras/{camera.id}?notice=camera_created")
 
 
-@router.get("/cameras/{camera_id}", response_class=HTMLResponse)
-async def camera_detail(
-    request: Request, db: DbSession, user: CurrentUser, camera_id: uuid.UUID
+async def _render_detail(
+    request: Request, db: AsyncSession, user: User, camera: Camera, **extra: object
 ) -> HTMLResponse:
-    camera = await _get_camera(db, camera_id, user)
+    """Страница камеры. Собрана в одном месте: её рендерят четыре обработчика,
+    и разъехавшийся контекст молча ломал бы то список ссылок, то диагностику."""
     links = list(
         await db.scalars(
             select(ShareLink)
@@ -166,7 +167,17 @@ async def camera_detail(
         ttl_choices=TTL_CHOICES,
         base_url=get_settings().base_url,
         now=dt.datetime.now(dt.UTC),
-        notice=notice(request.query_params.get("notice")),
+        **extra,
+    )
+
+
+@router.get("/cameras/{camera_id}", response_class=HTMLResponse)
+async def camera_detail(
+    request: Request, db: DbSession, user: CurrentUser, camera_id: uuid.UUID
+) -> HTMLResponse:
+    camera = await _get_camera(db, camera_id, user)
+    return await _render_detail(
+        request, db, user, camera, notice=notice(request.query_params.get("notice"))
     )
 
 
@@ -256,14 +267,82 @@ async def camera_delete(
     return redirect("/?notice=camera_deleted")
 
 
-@router.post("/cameras/{camera_id}/reprobe")
-async def camera_reprobe(
+@router.post("/cameras/{camera_id}/diagnose", response_class=HTMLResponse)
+async def camera_diagnose(
     request: Request, db: DbSession, user: CurrentUser, _: CsrfProtected, camera_id: uuid.UUID
-) -> RedirectResponse:
+) -> HTMLResponse:
+    """Полная проверка камеры по кнопке — синхронно, с показом отчёта.
+
+    Синхронно намеренно: оператор нажал «проверить» и должен увидеть ответ,
+    а не «результат появится в течение минуты». Проверка идёт до 40 секунд
+    (два запуска ffprobe и TCP-таймаут) — это нормальная цена за ответ на
+    вопрос «почему чёрный экран».
+    """
     camera = await _get_camera(db, camera_id, user)
-    camera.probed_at = None
+
+    try:
+        rtsp_url = get_cipher().decrypt(camera.rtsp_url_enc)
+    except DecryptionError:
+        return await _render_detail(
+            request, db, user, camera,
+            error="Не удалось расшифровать адрес камеры: ключ шифрования сменился. "
+                  "Введите RTSP-ссылку заново.",
+        )
+
+    report = await diagnose(camera, rtsp_url, get_mtx())
+
+    # Результат пробы кладём в БД: worker больше не будет перепробовать камеру,
+    # а список камер сразу покажет актуальный статус.
+    if report.probe is not None:
+        camera.probe = report.probe.as_dict()
+        camera.probed_at = dt.datetime.now(dt.UTC)
+        if not report.probe.ok:
+            camera.status = CameraStatus.error
+            camera.status_detail = report.probe.error
     await db.commit()
-    return redirect(f"/cameras/{camera.id}?notice=camera_updated")
+
+    log.info(
+        "camera_diagnosed",
+        camera_id=str(camera.id),
+        verdict=report.verdict_state,
+        failed=[step.key for step in report.failed],
+    )
+    return await _render_detail(request, db, user, camera, diagnosis=report)
+
+
+@router.post("/cameras/{camera_id}/profile")
+async def camera_set_profile(
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    _: CsrfProtected,
+    camera_id: uuid.UUID,
+    profile: Annotated[str, Form()],
+) -> RedirectResponse:
+    """Переключение профиля одной кнопкой прямо из отчёта диагностики.
+
+    Отдельный обработчик, а не форма настроек: диагностика говорит «нужен
+    транскод», и заставлять оператора искать нужный select в другой карточке —
+    ровно тот случай, когда совет не выполняют.
+    """
+    camera = await _get_camera(db, camera_id, user)
+    try:
+        camera.profile = StreamProfile(profile)
+    except ValueError:
+        raise Forbidden("Неизвестный профиль потока") from None
+
+    await audit.record(
+        db, audit.CAMERA_UPDATED, actor_id=user.id, target_type="camera",
+        target_id=str(camera.id), ip=client_ip(request), meta={"profile": profile},
+    )
+    await db.commit()
+
+    try:
+        await push_camera(camera, get_mtx())
+    except MediaMTXError as exc:
+        log.warning("push_failed", camera_id=str(camera.id), error=str(exc))
+
+    return redirect(f"/cameras/{camera.id}?notice=profile_changed")
 
 
 @router.get("/cameras/{camera_id}/snapshot.jpg")
@@ -323,26 +402,52 @@ async def link_create(
     )
     await db.commit()
 
-    links = list(
-        await db.scalars(
-            select(ShareLink)
-            .where(ShareLink.camera_id == camera.id)
-            .order_by(ShareLink.created_at.desc())
-        )
-    )
     # Токен показываем ровно один раз и прямо здесь: в БД лежит только его хеш,
     # а редирект утащил бы токен в историю браузера и в логи прокси.
-    return render(
-        request,
-        "camera_detail.html",
-        user=user,
-        camera=camera,
-        links=links,
-        ttl_choices=TTL_CHOICES,
-        base_url=get_settings().base_url,
-        now=dt.datetime.now(dt.UTC),
+    return await _render_detail(
+        request, db, user, camera,
         new_link=link,
         new_link_url=f"{get_settings().base_url}/v/{link.slug}?t={token}",
+    )
+
+
+@router.post("/links/{link_id}/rotate", response_class=HTMLResponse)
+async def link_rotate(
+    request: Request, db: DbSession, user: CurrentUser, _: CsrfProtected, link_id: uuid.UUID
+) -> HTMLResponse:
+    """Перевыпуск токена существующей ссылки.
+
+    Токен в БД не хранится, поэтому «покажите адрес, который я выдал в прошлый
+    раз» технически невозможно, и единственный честный ответ на это —
+    перевыпустить. Старый адрес перестаёт работать: иначе операция была бы
+    способом бесконтрольно размножать действующие ссылки.
+    """
+    link = await db.get(ShareLink, link_id)
+    if link is None:
+        raise Forbidden("Ссылка не найдена")
+    camera = await _get_camera(db, link.camera_id, user)
+
+    token = generate_token()
+    link.token_hash = hash_token(token)
+    link.revoked_at = None
+
+    await audit.record(
+        db, audit.LINK_ROTATED, actor_id=user.id, target_type="link", target_id=str(link.id),
+        ip=client_ip(request), meta={"camera_id": str(camera.id)},
+    )
+    await db.commit()
+
+    # Зрителям со старым адресом доступ обрываем сразу: cookie просмотра живёт
+    # своей жизнью и о смене токена сама не узнает.
+    await invalidate_link(link.id)
+    await drop_link_viewers(link.id)
+    await _kick_active_sessions(camera)
+
+    return await _render_detail(
+        request, db, user, camera,
+        new_link=link,
+        new_link_url=f"{get_settings().base_url}/v/{link.slug}?t={token}",
+        rotated=True,
     )
 
 

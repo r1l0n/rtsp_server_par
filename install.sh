@@ -502,7 +502,7 @@ ask_remaining() {
 
     if command -v ufw >/dev/null 2>&1 || command -v firewall-cmd >/dev/null 2>&1; then
         echo
-        echo "  ${DIM}Наружу нужны только ssh, 80, 443 и 8189/udp.${R}"
+        echo "  ${DIM}Наружу нужны только ssh, 80, 443 и 8189 (udp и tcp).${R}"
         if confirm "Настроить файрвол?" "да"; then
             SETUP_FIREWALL=1
         fi
@@ -624,7 +624,7 @@ setup_firewall() {
 
     if [ "$SETUP_FIREWALL" != "1" ]; then
         info "Пропущено по вашему выбору."
-        warn "Не забудьте открыть 80/tcp, 443/tcp и 8189/udp."
+        warn "Не забудьте открыть 80/tcp, 443/tcp, 8189/udp и 8189/tcp."
         return 0
     fi
 
@@ -644,19 +644,22 @@ setup_firewall() {
         ufw allow 80/tcp             >/dev/null
         ufw allow 443/tcp            >/dev/null
         ufw allow 8189/udp           >/dev/null
+        # TCP на том же порту — ICE-кандидат для сетей, где закрыт UDP.
+        ufw allow 8189/tcp           >/dev/null
         if ! ufw status | grep -q '^Status: active'; then
             if confirm "Включить ufw прямо сейчас?" "да"; then
                 ufw --force enable >/dev/null
             fi
         fi
-        ok "ufw: разрешены ${ssh_port}/tcp, 80/tcp, 443/tcp, 8189/udp"
+        ok "ufw: разрешены ${ssh_port}/tcp, 80/tcp, 443/tcp, 8189/udp, 8189/tcp"
     elif command -v firewall-cmd >/dev/null 2>&1; then
         firewall-cmd --permanent --add-port="${ssh_port}/tcp" >/dev/null
         firewall-cmd --permanent --add-port=80/tcp            >/dev/null
         firewall-cmd --permanent --add-port=443/tcp           >/dev/null
         firewall-cmd --permanent --add-port=8189/udp          >/dev/null
+        firewall-cmd --permanent --add-port=8189/tcp          >/dev/null
         firewall-cmd --reload >/dev/null
-        ok "firewalld: разрешены ${ssh_port}/tcp, 80/tcp, 443/tcp, 8189/udp"
+        ok "firewalld: разрешены ${ssh_port}/tcp, 80/tcp, 443/tcp, 8189/udp, 8189/tcp"
     fi
 }
 

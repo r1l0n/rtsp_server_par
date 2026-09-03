@@ -39,9 +39,19 @@ class ProbeResult:
     audio_ok: bool = True
     recommended_profile: str = StreamProfile.passthrough.value
     notes: list[str] = field(default_factory=list)
+    #: Каким транспортом получен результат — «tcp» или «udp».
+    transport: str = ""
+    #: Полный вывод ffprobe с вырезанным паролем. Нужен диагностике: одна
+    #: последняя строка ошибки слишком часто не содержит настоящей причины.
+    stderr: str = ""
 
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    def as_dict(self, *, include_log: bool = False) -> dict[str, Any]:
+        """Для хранения в БД. Сырой лог по умолчанию не кладём: он большой,
+        живёт ровно до следующей пробы и нужен только на экране диагностики."""
+        data = asdict(self)
+        if not include_log:
+            data.pop("stderr", None)
+        return data
 
 
 def _parse_fps(value: str) -> float:
@@ -53,14 +63,23 @@ def _parse_fps(value: str) -> float:
         return 0.0
 
 
-async def probe_rtsp(url: str, timeout: int = PROBE_TIMEOUT) -> ProbeResult:  # noqa: ASYNC109
+async def probe_rtsp(
+    url: str,
+    timeout: int = PROBE_TIMEOUT,  # noqa: ASYNC109
+    transport: str = "tcp",
+) -> ProbeResult:
     # timeout здесь — это таймаут внешнего процесса ffprobe, который мы обязаны
     # убить сами; отменой задачи его не остановить, поэтому параметр свой.
+    if transport not in ("tcp", "udp"):
+        raise ValueError(f"неизвестный RTSP-транспорт: {transport}")
+
     args = [
         "ffprobe",
-        "-v", "error",
+        # verbose, а не error: диагностике нужен весь диалог с камерой, иначе
+        # «401 Unauthorized» теряется среди служебных строк ffprobe.
+        "-v", "verbose",
         "-hide_banner",
-        "-rtsp_transport", "tcp",
+        "-rtsp_transport", transport,
         "-analyzeduration", "3000000",
         "-probesize", "5000000",
         "-print_format", "json",
@@ -75,7 +94,7 @@ async def probe_rtsp(url: str, timeout: int = PROBE_TIMEOUT) -> ProbeResult:  # 
             stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError:
-        return ProbeResult(error="ffprobe не найден в образе")
+        return ProbeResult(error="ffprobe не найден в образе", transport=transport)
 
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
@@ -83,21 +102,48 @@ async def probe_rtsp(url: str, timeout: int = PROBE_TIMEOUT) -> ProbeResult:  # 
         process.kill()
         await process.wait()
         return ProbeResult(
-            error=f"камера не ответила за {timeout} с (проверьте адрес, порт и учётные данные)"
+            error=f"камера не ответила за {timeout} с (проверьте адрес, порт и учётные данные)",
+            transport=transport,
         )
 
+    # В выводе ffprobe всегда есть исходный URL с паролем — маскируем текст
+    # целиком, а не только строку с ошибкой: он показывается оператору.
+    log_text = strip_credentials(stderr.decode("utf-8", "replace").strip())[-8000:]
+
     if process.returncode != 0:
-        message = stderr.decode("utf-8", "replace").strip().splitlines()
-        detail = message[-1] if message else "неизвестная ошибка"
-        # В сообщении ffprobe может оказаться исходный URL с паролем.
-        return ProbeResult(error=strip_credentials(detail)[:300])
+        lines = [line for line in log_text.splitlines() if line.strip()]
+        return ProbeResult(
+            error=_meaningful_error(lines)[:300], transport=transport, stderr=log_text
+        )
 
     try:
         payload = json.loads(stdout.decode("utf-8", "replace"))
     except json.JSONDecodeError:
-        return ProbeResult(error="не удалось разобрать ответ ffprobe")
+        return ProbeResult(
+            error="не удалось разобрать ответ ffprobe", transport=transport, stderr=log_text
+        )
 
-    return _interpret(payload.get("streams") or [])
+    result = _interpret(payload.get("streams") or [])
+    result.transport = transport
+    result.stderr = log_text
+    return result
+
+
+#: Строки уровня verbose, которые ничего не объясняют, но всегда идут последними.
+_NOISE = ("Immediate exit requested", "Statistics:", "bytes read", "seeks")
+
+
+def _meaningful_error(lines: list[str]) -> str:
+    """Последняя содержательная строка вывода ffprobe.
+
+    Именно последняя, а не первая: ffprobe сначала печатает служебное, а
+    настоящую причину («401 Unauthorized», «Connection timed out») — в конце.
+    Но самый хвост занимает статистика, её и отбрасываем.
+    """
+    for line in reversed(lines):
+        if not any(noise in line for noise in _NOISE):
+            return line.strip()
+    return lines[-1].strip() if lines else "неизвестная ошибка"
 
 
 def _interpret(streams: list[dict[str, Any]]) -> ProbeResult:

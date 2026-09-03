@@ -89,6 +89,7 @@ sudo ufw allow 22/tcp        # ssh
 sudo ufw allow 80/tcp        # ACME-проверка и редирект на https
 sudo ufw allow 443/tcp       # панель, плеер, медиа
 sudo ufw allow 8189/udp      # медиа WebRTC
+sudo ufw allow 8189/tcp      # тот же WebRTC там, где закрыт UDP
 sudo ufw enable
 ```
 

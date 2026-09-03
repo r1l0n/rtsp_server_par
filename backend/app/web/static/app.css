@@ -167,18 +167,86 @@ button:hover, .button:hover { border-color: var(--accent); }
 .inline { display: inline; }
 .danger-zone { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
 
+/* align-items: start, а не end. При end поля выравнивались по нижнему краю,
+   и любое поле с подсказкой утаскивало свой input вверх относительно соседей —
+   форма выглядела рассыпавшейся. Кнопке отступ задан явно: она встаёт в тот же
+   ряд, что и сами поля, а не под их подписями. */
 .row-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0 16px;
-  align-items: end;
+  align-items: start;
   margin-bottom: 20px;
 }
-.row-form button { margin-bottom: 14px; }
+.row-form > button { margin-top: 28px; margin-bottom: 14px; align-self: start; }
 
-.copyfield { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+/* Два поля в ряд там, где ширины карточки хватает, и одно — на узком экране. */
+.field-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0 16px;
+  align-items: start;
+}
+
+/* ── Поля «скопируйте это» ─────────────────────────────────────────────── */
+.copyfield {
+  width: 100%;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+}
+.copyrow { display: flex; gap: 8px; align-items: center; }
+.copyrow .copyfield { flex: 1 1 auto; min-width: 0; }
+.copybutton { flex: 0 0 auto; white-space: nowrap; padding: 8px 12px; font-size: 13px; }
+/* Ширины хватает ровно на «https://<хост>/v/<slug>» плюс кнопку: адрес, который
+   не виден целиком, бесполезен — именно этим была неудобна прежняя таблица. */
+.cell-address { min-width: 430px; vertical-align: top; }
+.cell-address .hint { margin-top: 2px; }
+
+/* ── Отчёт диагностики ─────────────────────────────────────────────────── */
+.checks { list-style: none; margin: 0 0 16px; padding: 0; }
+.checks li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+.checks li:last-child { border-bottom: none; }
+.check-mark {
+  flex: 0 0 20px;
+  text-align: center;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.check-ok .check-mark { color: var(--ok); }
+.check-warn .check-mark { color: var(--warn); }
+.check-fail .check-mark { color: var(--danger); }
+.check-detail { color: var(--ink); font-size: 14px; margin-top: 2px; }
+.check-hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+.raw { margin-top: 16px; }
+.raw summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.log {
+  max-height: 320px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+button[data-busy-active] { opacity: 0.6; cursor: progress; }
 
 /* ── Таблицы ───────────────────────────────────────────────────────────── */
+/* Таблица со ссылками не сжимается ниже читаемой ширины — на узком экране
+   она прокручивается вбок, а не режет адрес. */
+.table-wrap { overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .table th, .table td {
   text-align: left;

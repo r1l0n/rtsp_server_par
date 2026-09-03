@@ -56,12 +56,15 @@ services:
       retries: 3
     logging: *logging
 
-  # ─── Медиа-сервер. Наружу торчит только UDP для WebRTC-медиа ─────────────
+  # ─── Медиа-сервер. Наружу торчит только порт WebRTC-медиа ───────────────
   mediamtx:
     image: bluenviron/mediamtx:1.20.1-ffmpeg
     restart: unless-stopped
     ports:
+      # UDP — основной путь. TCP на том же номере — запасной ICE-кандидат для
+      # сетей, где исходящий UDP закрыт; без него WebRTC там не поднимается.
       - "8189:8189/udp"
+      - "8189:8189/tcp"
     environment:
       # ICE-кандидат, который увидит браузер
       MTX_WEBRTCADDITIONALHOSTS: ${PUBLIC_HOST}

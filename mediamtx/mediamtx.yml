@@ -92,14 +92,19 @@ webrtcAddress: :8889
 webrtcEncryption: no
 webrtcAllowOrigins: ['*']
 webrtcLocalUDPAddress: :8189
-webrtcLocalTCPAddress: ""
+# ICE поверх TCP на том же номере порта. Без него WebRTC не работает вообще
+# нигде, где закрыт исходящий UDP, — а это типичная корпоративная сеть и
+# заметная часть мобильных операторов. С ним браузер сначала пробует UDP
+# (быстрее), а при неудаче переключается на TCP сам, не доходя до HLS.
+webrtcLocalTCPAddress: :8189
 # В контейнере адреса интерфейсов — это внутренние docker-IP, для браузера они
 # бесполезны. Публичный адрес приходит из MTX_WEBRTCADDITIONALHOSTS (см. compose).
 webrtcIPsFromInterfaces: no
 webrtcAdditionalHosts: []
-# STUN/TURN не нужен, пока у VPS публичный IP и открыт 8189/udp.
-# Для сетей, режущих UDP, работает HLS-фолбэк. Если понадобится coturn —
-# прописать сюда: [{url: 'turn:...', username: '...', password: '...'}]
+# STUN/TURN не нужен, пока у VPS публичный IP и открыты 8189/udp и 8189/tcp.
+# Если и TCP-кандидат не проходит, остаётся HLS-фолбэк по 443. Если когда-то
+# понадобится coturn — прописать сюда:
+# [{url: 'turn:...', username: '...', password: '...'}]
 webrtcICEServers2: []
 
 # --- Значения по умолчанию для путей -----------------------------------------

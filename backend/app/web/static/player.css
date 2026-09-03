@@ -26,7 +26,9 @@ body.player-page {
 
 .player-overlay {
   position: absolute;
-  inset: 0;
+  /* Не inset: 0 — иначе плашка накрывает панель управления, и до кнопок
+     переключения транспорта не добраться именно тогда, когда они нужны. */
+  inset: 0 0 56px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -51,7 +53,8 @@ body.player-page {
   transition: opacity 0.15s;
 }
 .player:hover .player-bar,
-.player:focus-within .player-bar { opacity: 1; }
+.player:focus-within .player-bar,
+.player.has-status .player-bar { opacity: 1; }
 
 .player-title { font-weight: 600; }
 .player-transport { color: #98a1ad; font-size: 12px; margin-right: auto; }
@@ -68,5 +71,22 @@ body.player-page {
 .player-button:hover { background: rgba(255, 255, 255, 0.2); }
 .player-button[hidden] { display: none; }
 
-/* Во встроенном плеере панель не нужна: размер задаёт хост-страница. */
+/* Переключатель транспорта: слитная группа из трёх кнопок. */
+.player-modes { display: inline-flex; }
+.player-mode {
+  border-radius: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-left-width: 0;
+}
+.player-mode:first-child { border-radius: 8px 0 0 8px; border-left-width: 1px; }
+.player-mode:last-child { border-radius: 0 8px 8px 0; }
+.player-mode.is-active {
+  background: rgba(255, 255, 255, 0.32);
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+/* Во встроенном плеере высоту задаёт хост-страница. Панель управления там
+   тоже есть — без переключателя транспорта iframe нечем диагностировать. */
 body.embed .player { height: 100%; }
+body.embed .player-overlay { inset: 0 0 44px; }

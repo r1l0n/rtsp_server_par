@@ -18,6 +18,14 @@
     <div class="player-bar">
       <span class="player-title">{{ camera_name }}</span>
       <span class="player-transport" id="transport"></span>
+      <span class="player-modes" role="group" aria-label="Транспорт">
+        <button type="button" class="player-button player-mode" data-mode="auto"
+                title="Сначала WebRTC, при неудаче HLS">Авто</button>
+        <button type="button" class="player-button player-mode" data-mode="webrtc"
+                title="Задержка около секунды, нужен UDP">WebRTC</button>
+        <button type="button" class="player-button player-mode" data-mode="hls"
+                title="Идёт по 443/TCP, проходит везде">HLS</button>
+      </span>
       <button type="button" id="sound" class="player-button" hidden>Включить звук</button>
       <button type="button" id="fullscreen" class="player-button">На весь экран</button>
     </div>

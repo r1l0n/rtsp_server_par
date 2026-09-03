@@ -15,6 +15,17 @@
        data-audio="{{ '1' if audio_enabled else '0' }}">
     <video id="video" autoplay playsinline muted></video>
     <div class="player-overlay" id="status">Подключение…</div>
+    <div class="player-bar">
+      <span class="player-transport" id="transport"></span>
+      <span class="player-modes" role="group" aria-label="Транспорт">
+        <button type="button" class="player-button player-mode" data-mode="auto"
+                title="Сначала WebRTC, при неудаче HLS">Авто</button>
+        <button type="button" class="player-button player-mode" data-mode="webrtc"
+                title="Задержка около секунды, нужен UDP">WebRTC</button>
+        <button type="button" class="player-button player-mode" data-mode="hls"
+                title="Идёт по 443/TCP, проходит везде">HLS</button>
+      </span>
+    </div>
   </div>
   <script src="/static/player.js" defer></script>
 </body>

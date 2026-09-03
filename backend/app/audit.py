@@ -36,6 +36,7 @@ CAMERA_DELETED = "camera.deleted"
 
 LINK_CREATED = "link.created"
 LINK_REVOKED = "link.revoked"
+LINK_ROTATED = "link.rotated"
 LINK_DELETED = "link.deleted"
 LINK_VIEWED = "link.viewed"
 LINK_DENIED = "link.denied"
