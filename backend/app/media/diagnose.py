@@ -322,6 +322,8 @@ class Probe:
     content_type: str = ""
     body: str = ""
     error: str = ""
+    #: Куда привёл редирект, если он был.
+    followed: str = ""
 
     def describe(self) -> str:
         if self.error:
@@ -329,6 +331,8 @@ class Probe:
         parts = [f"HTTP {self.status}"]
         if self.location:
             parts.append(f"Location: {self.location}")
+        if self.followed:
+            parts.append(f"по редиректу: {self.followed}")
         if self.content_type:
             parts.append(self.content_type)
         if self.body:
@@ -351,12 +355,22 @@ async def _probe_endpoint(url: str, method: str = "GET", **kwargs: object) -> Pr
             timeout=httpx.Timeout(STREAM_WAIT), follow_redirects=False, trust_env=False
         ) as client:
             response = await client.request(method, url, **kwargs)  # type: ignore[arg-type]
-            return Probe(
+            probe = Probe(
                 status=response.status_code,
                 location=response.headers.get("location", ""),
                 content_type=response.headers.get("content-type", ""),
                 body=" ".join(response.text.split())[:160],
             )
+            # Один шаг по редиректу проходим вручную: знать, ЧЕМ отвечает
+            # конечный адрес, важнее, чем сам факт 3xx.
+            if 300 <= response.status_code < 400 and probe.location:
+                landing = await client.request(
+                    method, response.headers["location"], **kwargs
+                )  # type: ignore[arg-type]
+                probe.followed = (
+                    f"{landing.status_code} {landing.headers.get('content-type', '')}".strip()
+                )
+            return probe
     except httpx.HTTPError as exc:
         return Probe(error=str(exc)[:200])
 

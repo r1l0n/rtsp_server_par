@@ -83,7 +83,7 @@ MTX_DEFAULTS = {
     "runOnDemandCloseAfter": "10s",
     "sourceOnDemand": False,
     "sourceOnDemandStartTimeout": "10s",
-    "sourceOnDemandCloseAfter": "60s",
+    "sourceOnDemandCloseAfter": "1m0s",
     "rtspTransport": "tcp",
     "sourceRedirect": "",
     "srtReadPassphrase": "",
@@ -109,12 +109,37 @@ def test_unchanged_path_is_never_rewritten(profile: StreamProfile) -> None:
     assert conf_diff(_as_mediamtx_returns_it(wanted), wanted) == {}
 
 
+@pytest.mark.parametrize(
+    ("mtx_value", "our_value"),
+    [
+        ("1m0s", "60s"),     # ровно то, что MediaMTX возвращает на наши 60s
+        ("1h0m0s", "3600s"),
+        ("10s", "10s"),
+        ("1m30s", "90s"),
+    ],
+)
+def test_durations_are_compared_by_value_not_by_spelling(
+    mtx_value: str, our_value: str
+) -> None:
+    """MediaMTX нормализует длительности при разборе: посланное «60s» он
+    возвращает как «1m0s». Дословное сравнение строк считало это изменением,
+    и реконсилятор переписывал путь каждые 15 секунд — бесконечно."""
+    assert conf_diff({"runOnDemandCloseAfter": mtx_value},
+                     {"runOnDemandCloseAfter": our_value}) == {}
+
+
+def test_different_durations_are_still_a_change() -> None:
+    assert conf_diff({"runOnDemandCloseAfter": "1m0s"},
+                     {"runOnDemandCloseAfter": "90s"})
+
+
 def test_real_change_is_still_detected_against_a_full_api_response() -> None:
     wanted = build_path_conf(_camera(), "rtsp://203.0.113.5/new")
     current = _as_mediamtx_returns_it(
         build_path_conf(_camera(), "rtsp://203.0.113.5/old")
     )
     assert set(conf_diff(current, wanted)) == {"source"}
+
 
 def test_identical_config_is_not_a_change() -> None:
     wanted = build_path_conf(_camera(), "rtsp://203.0.113.5/s")

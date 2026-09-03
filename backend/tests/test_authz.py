@@ -219,3 +219,26 @@ async def test_watching_extends_the_grant(allow_all_links, fake_redis) -> None:
 
     ttl = await fake_redis.ttl(f"viewer:{viewer_id}")
     assert ttl > get_settings().view_cookie_ttl_minutes * 60 - 10
+
+
+async def test_uri_without_prefix_is_still_recognised(allow_all_links) -> None:
+    """Caddy может срезать /whep до forward_auth — доступ от этого не пропадает.
+
+    Ровно так сервис и не работал: /internal/authz получал «/<path>/whep»,
+    не узнавал URI и отвечал 403 на каждый медиа-запрос.
+    """
+    viewer_id = new_viewer_id()
+    await grant(viewer_id, MTX_PATH, uuid.uuid4(), 600)
+
+    with _client() as client:
+        response = _authz(client, f"/{MTX_PATH}/whep", {VIEW_COOKIE: viewer_id})
+
+    assert response.status_code == 200
+    assert response.headers["X-Mtx-Path"] == MTX_PATH
+
+
+def test_non_media_uri_is_still_rejected() -> None:
+    """Терпимость к префиксу не должна превращать authz в «пускаем всех»."""
+    with _client() as client:
+        for uri in ("/login", "/", "/cameras/abcdefgh12345678abcdefgh"):
+            assert _authz(client, uri, {VIEW_COOKIE: "whatever"}).status_code == 403

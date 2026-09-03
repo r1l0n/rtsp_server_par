@@ -63,15 +63,23 @@
 		path_regexp ^/whep/[a-z0-9]{8,64}/whep$
 	}
 	handle @whep_create {
-		forward_auth api:8000 {
-			uri /internal/authz
-			copy_headers X-Mtx-Path X-Link-Id
-		}
-		uri strip_prefix /whep
-		reverse_proxy mediamtx:8889 {
-			# MediaMTX отдаёт Location сессии относительно своего корня —
-			# возвращаем клиенту адрес с нашим префиксом.
-			header_down Location "^/(.*)$" "/whep/${1}"
+		# route обязателен. Внутри handle Caddy исполняет директивы не в том
+		# порядке, в каком они написаны, а по своему встроенному списку, где
+		# `uri` идёт РАНЬШЕ `forward_auth`. Без route префикс срезался до
+		# проверки, /internal/authz получал URI вида «/<path>/whep» вместо
+		# «/whep/<path>/whep», не узнавал его и отвечал 403 — то есть медиа
+		# не работало вообще ни у кого. route сохраняет порядок как написано.
+		route {
+			forward_auth api:8000 {
+				uri /internal/authz
+				copy_headers X-Mtx-Path X-Link-Id
+			}
+			uri strip_prefix /whep
+			reverse_proxy mediamtx:8889 {
+				# MediaMTX отдаёт Location сессии относительно своего корня —
+				# возвращаем клиенту адрес с нашим префиксом.
+				header_down Location "^/(.*)$" "/whep/${1}"
+			}
 		}
 	}
 
@@ -81,12 +89,14 @@
 		path_regexp ^/whep/[a-z0-9]{8,64}/whep/[A-Za-z0-9_-]+$
 	}
 	handle @whep_session {
-		forward_auth api:8000 {
-			uri /internal/authz
-			copy_headers X-Mtx-Path X-Link-Id
+		route {
+			forward_auth api:8000 {
+				uri /internal/authz
+				copy_headers X-Mtx-Path X-Link-Id
+			}
+			uri strip_prefix /whep
+			reverse_proxy mediamtx:8889
 		}
-		uri strip_prefix /whep
-		reverse_proxy mediamtx:8889
 	}
 
 	# ── LL-HLS: плейлисты и сегменты ─────────────────────────────────────────
@@ -95,12 +105,14 @@
 		path_regexp ^/hls/[a-z0-9]{8,64}/[A-Za-z0-9._-]+\.(m3u8|mp4|ts)$
 	}
 	handle @hls {
-		forward_auth api:8000 {
-			uri /internal/authz
-			copy_headers X-Mtx-Path X-Link-Id
+		route {
+			forward_auth api:8000 {
+				uri /internal/authz
+				copy_headers X-Mtx-Path X-Link-Id
+			}
+			uri strip_prefix /hls
+			reverse_proxy mediamtx:8888
 		}
-		uri strip_prefix /hls
-		reverse_proxy mediamtx:8888
 	}
 
 	# Всё остальное на медиа-префиксах — глухо закрыто.
