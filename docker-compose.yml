@@ -1,0 +1,182 @@
+name: rtspgw
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app-common: &app-common
+  build:
+    context: ./backend
+  image: rtspgw-api:local
+  restart: unless-stopped
+  env_file: .env
+  secrets: [app_key]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m,mode=1777
+  logging: *logging
+
+services:
+  # ─── Единственная публичная точка входа ──────────────────────────────────
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+    depends_on:
+      api:
+        condition: service_healthy
+      mediamtx:
+        condition: service_started
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    healthcheck:
+      test: ["CMD", "caddy", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *logging
+
+  # ─── Медиа-сервер. Наружу торчит только UDP для WebRTC-медиа ─────────────
+  mediamtx:
+    image: bluenviron/mediamtx:1.20.1-ffmpeg
+    restart: unless-stopped
+    ports:
+      - "8189:8189/udp"
+    environment:
+      # ICE-кандидат, который увидит браузер
+      MTX_WEBRTCADDITIONALHOSTS: ${PUBLIC_HOST}
+    volumes:
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
+    networks: [edge, core]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9997/v3/paths/list"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
+    logging: *logging
+
+  # ─── Control-plane: панель, авторизация, authz-хук, реконсилятор ─────────
+  api:
+    <<: *app-common
+    command:
+      - uvicorn
+      - app.main:app
+      - --host=0.0.0.0
+      - --port=8000
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+      - --no-server-header
+    networks: [edge, core, data]
+    volumes:
+      # Превью камер пишет worker, панель их только отдаёт.
+      - snapshots:/var/lib/rtspgw/snapshots:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.cli", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  # ─── Фоновые задачи: ffprobe-проба, снапшоты, чистка токенов ─────────────
+  worker:
+    <<: *app-common
+    command: ["python", "-m", "app.worker"]
+    networks: [core, data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - snapshots:/var/lib/rtspgw/snapshots
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [data]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # noeviction: сессии и токены не должны вытесняться под давлением памяти
+    command:
+      - redis-server
+      - --appendonly=yes
+      - --maxmemory=256mb
+      - --maxmemory-policy=noeviction
+    volumes:
+      - redisdata:/data
+    networks: [data]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *logging
+
+networks:
+  # Caddy ↔ api/mediamtx. Только сюда попадает трафик снаружи.
+  edge:
+    driver: bridge
+    ipam:
+      config: [{subnet: 172.28.10.0/24}]
+  # api/worker ↔ Control API MediaMTX + исходящий RTSP к камерам.
+  core:
+    driver: bridge
+    ipam:
+      config: [{subnet: 172.28.20.0/24}]
+  # Postgres/Redis. internal — без выхода в интернет вообще.
+  data:
+    driver: bridge
+    internal: true
+    ipam:
+      config: [{subnet: 172.28.30.0/24}]
+
+secrets:
+  app_key:
+    file: ./secrets/app_key
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pgdata:
+  redisdata:
+  snapshots:

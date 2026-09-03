@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Коды восстановления — {{ app_name }}{% endblock %}
+{% block content %}
+<div class="card card-narrow">
+<h1>Коды восстановления</h1>
+
+{% if codes %}
+  <div class="alert alert-ok">
+    Двухфакторная аутентификация включена.
+  </div>
+  <p><strong>Сохраните эти коды сейчас.</strong> Они показываются один раз — в базе
+     хранятся только их хеши. Каждый код срабатывает однократно и заменяет код из
+     приложения, если телефон недоступен.</p>
+  <ul class="codes">
+    {% for code in codes %}<li><code>{{ code }}</code></li>{% endfor %}
+  </ul>
+  <p><a class="button primary" href="/profile">Я сохранил коды</a></p>
+{% else %}
+  <p>Неиспользованных кодов осталось: <strong>{{ remaining }}</strong>.</p>
+  <p class="muted">Посмотреть уже выданные коды нельзя — хранятся только их хеши.
+     Чтобы получить новый комплект, отключите и включите второй фактор заново.</p>
+  <p><a href="/profile">Назад в профиль</a></p>
+{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,40 @@
+groups:
+  - name: rtspgw
+    rules:
+      # Камера считается упавшей, только если она НЕ в режиме idle: idle —
+      # это нормальное состояние on-demand камеры без зрителей, и будить
+      # по нему дежурного нельзя.
+      - alert: CameraOffline
+        expr: sum(rtspgw_cameras{status=~"offline|error"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Камеры недоступны: {{ $value }} шт."
+          description: "Проверьте карточку камеры в панели — там причина из ffprobe."
+
+      - alert: ApiDown
+        expr: up{job="rtspgw-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Панель управления не отвечает"
+
+      - alert: MediaServerDown
+        expr: up{job="mediamtx"} == 0
+        for: 2m
+        labels:
+          severity: critical
+
+        annotations:
+          summary: "MediaMTX не отвечает — трансляции не работают"
+
+      - alert: NoActiveLinks
+        expr: rtspgw_active_links == 0
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: "Сутки нет ни одной действующей ссылки"
+          description: "Возможно, все ссылки истекли и никто этого не заметил."

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{{ camera_name }}</title>
+  <link rel="stylesheet" href="/static/player.css">
+</head>
+<body class="player-page">
+  <div class="player" id="player"
+       data-whep="{{ whep_url }}"
+       data-hls="{{ hls_url }}"
+       data-audio="{{ '1' if audio_enabled else '0' }}">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="player-overlay" id="status">Подключение…</div>
+    <div class="player-bar">
+      <span class="player-title">{{ camera_name }}</span>
+      <span class="player-transport" id="transport"></span>
+      <button type="button" id="sound" class="player-button" hidden>Включить звук</button>
+      <button type="button" id="fullscreen" class="player-button">На весь экран</button>
+    </div>
+  </div>
+  <script src="/static/player.js" defer></script>
+</body>
+</html>

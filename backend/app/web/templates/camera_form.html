@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Новая камера — {{ app_name }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Добавить камеру</h1>
+  <form method="post" action="/cameras">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <label>Название
+      <input type="text" name="name" required maxlength="200"
+             value="{{ form.name if form else '' }}" autofocus>
+    </label>
+
+    <label>RTSP-ссылка
+      <input type="text" name="rtsp_url" required autocomplete="off" spellcheck="false"
+             placeholder="rtsp://логин:пароль@31.148.246.249:4259/stream">
+      <span class="hint">Спецсимволы в логине и пароле нужно записать в процентной
+        кодировке: <code>@</code> → <code>%40</code>, <code>:</code> → <code>%3A</code>,
+        <code>#</code> → <code>%23</code>. Ссылка хранится в зашифрованном виде и
+        зрителям не показывается.</span>
+    </label>
+
+    <label>Описание
+      <textarea name="description" rows="2" maxlength="2000">{{ form.description if form else '' }}</textarea>
+    </label>
+
+    <fieldset>
+      <legend>Режим потока</legend>
+      <label class="check">
+        <input type="checkbox" name="on_demand" checked>
+        Подключаться к камере только когда есть зритель
+        <span class="hint">Экономит канал и нагрузку на камеру. Первый кадр появляется
+          на 1–3 секунды позже.</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="audio_enabled" checked>
+        Передавать звук
+      </label>
+      <label>Профиль
+        <select name="profile">
+          <option value="passthrough">Без перекодирования (рекомендуется)</option>
+          <option value="transcode">Перекодировать в H.264/Opus</option>
+        </select>
+        <span class="hint">Перекодирование нужно только если камера отдаёт H.265 или
+          звук в AAC. Оно занимает примерно одно ядро CPU на камеру. После добавления
+          сервис сам определит кодеки и подскажет, нужно ли оно.</span>
+      </label>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" class="primary">Добавить</button>
+      <a class="button" href="/">Отмена</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

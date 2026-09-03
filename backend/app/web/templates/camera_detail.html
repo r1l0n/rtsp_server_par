@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}{{ camera.name }} — {{ app_name }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ camera.name }}</h1>
+  <span class="status status-{{ camera.status.value }}">{{ camera.status.value }}</span>
+</div>
+{% if camera.status_detail %}<p class="muted">{{ camera.status_detail }}</p>{% endif %}
+
+{% if new_link_url %}
+<div class="alert alert-ok">
+  <strong>Ссылка создана.</strong>
+  <p>Скопируйте её сейчас — токен показывается один раз и в базе не хранится.</p>
+  <input class="copyfield" type="text" readonly value="{{ new_link_url }}"
+        >
+  <details>
+    <summary>Код для встраивания на сайт</summary>
+    <textarea class="copyfield" readonly rows="3">&lt;iframe src="{{ base_url }}/embed/{{ new_link.slug }}?t=…" width="640" height="360" frameborder="0" allowfullscreen&gt;&lt;/iframe&gt;</textarea>
+    <p class="hint">Подставьте в <code>?t=</code> токен из ссылки выше.</p>
+  </details>
+</div>
+{% endif %}
+
+<div class="columns">
+  <section class="card">
+    <h2>Диагностика</h2>
+    {% if camera.probe %}
+      <dl class="kv">
+        <dt>Видео</dt><dd>{{ camera.probe.video_codec|upper or '—' }}
+          {%- if camera.probe.width %} · {{ camera.probe.width }}×{{ camera.probe.height }}{% endif %}
+          {%- if camera.probe.fps %} · {{ camera.probe.fps }} fps{% endif %}</dd>
+        <dt>Звук</dt><dd>{{ camera.probe.audio_codec|upper or 'нет' }}</dd>
+        <dt>Проверено</dt><dd>{{ camera.probed_at.strftime('%d.%m.%Y %H:%M') if camera.probed_at else '—' }}</dd>
+      </dl>
+      {% if camera.probe.error %}
+        <div class="alert alert-error">{{ camera.probe.error }}</div>
+      {% endif %}
+      {% for note in camera.probe.notes %}
+        <p class="{{ 'warn' if not camera.probe.video_ok or not camera.probe.audio_ok else 'muted' }}">{{ note }}</p>
+      {% endfor %}
+    {% else %}
+      <p class="muted">Проба кодеков ещё не выполнена — обычно занимает до минуты
+         после добавления.</p>
+    {% endif %}
+    <form method="post" action="/cameras/{{ camera.id }}/reprobe" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit">Проверить заново</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Настройки</h2>
+    <form method="post" action="/cameras/{{ camera.id }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Название
+        <input type="text" name="name" value="{{ camera.name }}" required maxlength="200">
+      </label>
+      <label>Описание
+        <textarea name="description" rows="2" maxlength="2000">{{ camera.description }}</textarea>
+      </label>
+      <label>Новая RTSP-ссылка
+        <input type="text" name="rtsp_url" autocomplete="off" spellcheck="false"
+               placeholder="оставьте пустым, чтобы не менять">
+        <span class="hint">Текущая: <code>{{ camera.host }}:{{ camera.port }}</code>.
+          Пароль не показывается.</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="on_demand" {% if camera.on_demand %}checked{% endif %}>
+        Подключаться только при наличии зрителя
+      </label>
+      <label class="check">
+        <input type="checkbox" name="audio_enabled" {% if camera.audio_enabled %}checked{% endif %}>
+        Передавать звук
+      </label>
+      <label class="check">
+        <input type="checkbox" name="is_enabled" {% if camera.is_enabled %}checked{% endif %}>
+        Камера включена
+      </label>
+      <label>Профиль
+        <select name="profile">
+          <option value="passthrough" {% if camera.profile.value == 'passthrough' %}selected{% endif %}>
+            Без перекодирования</option>
+          <option value="transcode" {% if camera.profile.value == 'transcode' %}selected{% endif %}>
+            Перекодировать в H.264/Opus</option>
+        </select>
+      </label>
+      <div class="actions">
+        <button type="submit" class="primary">Сохранить</button>
+      </div>
+    </form>
+
+    <form method="post" action="/cameras/{{ camera.id }}/delete" class="danger-zone"
+          data-confirm="Удалить камеру «{{ camera.name }}» вместе со всеми ссылками?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="danger">Удалить камеру и все её ссылки</button>
+    </form>
+  </section>
+</div>
+
+<section class="card">
+  <h2>Публичные ссылки</h2>
+
+  <form method="post" action="/cameras/{{ camera.id }}/links" class="row-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Название
+      <input type="text" name="label" maxlength="200" placeholder="для кого ссылка">
+    </label>
+    <label>Срок действия
+      <select name="ttl">
+        <option value="1h">1 час</option>
+        <option value="24h" selected>1 сутки</option>
+        <option value="7d">7 дней</option>
+        <option value="30d">30 дней</option>
+        <option value="never">бессрочно</option>
+      </select>
+    </label>
+    <label>Лимит зрителей
+      <input type="number" name="max_concurrent" value="0" min="0" max="10000">
+      <span class="hint">0 — без ограничения</span>
+    </label>
+    <label>Разрешённые IP/CIDR
+      <input type="text" name="allowed_cidrs" placeholder="например 203.0.113.0/24">
+      <span class="hint">пусто — с любого адреса</span>
+    </label>
+    <label>Пароль на ссылку
+      <input type="password" name="link_password" autocomplete="new-password"
+             placeholder="необязательно">
+    </label>
+    <button type="submit" class="primary">Создать ссылку</button>
+  </form>
+
+  {% if links %}
+  <table class="table">
+    <thead>
+      <tr><th>Название</th><th>Адрес</th><th>Действует до</th><th>Просмотров</th>
+          <th>Состояние</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for link in links %}
+      <tr>
+        <td>{{ link.label or '—' }}</td>
+        <td><code>/v/{{ link.slug }}</code></td>
+        <td>{{ link.expires_at.strftime('%d.%m.%Y %H:%M') if link.expires_at else 'бессрочно' }}</td>
+        <td>{{ link.view_count }}</td>
+        <td>
+          {% if link.revoked_at %}<span class="badge badge-off">отозвана</span>
+          {% elif link.expires_at and link.expires_at <= now %}<span class="badge badge-off">истекла</span>
+          {% else %}<span class="badge badge-on">активна</span>{% endif %}
+          {% if link.password_hash %}<span class="badge">пароль</span>{% endif %}
+          {% if link.allowed_cidrs %}<span class="badge">IP-фильтр</span>{% endif %}
+        </td>
+        <td class="row-actions">
+          {% if not link.revoked_at %}
+          <form method="post" action="/links/{{ link.id }}/revoke" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Отозвать</button>
+          </form>
+          {% endif %}
+          <form method="post" action="/links/{{ link.id }}/delete" class="inline"
+                data-confirm="Удалить ссылку без возможности восстановления?">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="danger">Удалить</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">Ссылок ещё нет.</p>
+  {% endif %}
+</section>
+{% endblock %}

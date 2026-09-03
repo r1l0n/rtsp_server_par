@@ -1,0 +1,106 @@
+{
+	email {$ACME_EMAIL}
+	# Реальный IP клиента берём только из доверенных прокси (их тут нет —
+	# Caddy сам является границей). Если перед Caddy встанет CDN/балансировщик,
+	# добавить его подсеть сюда.
+	servers {
+		trusted_proxies static private_ranges
+		client_ip_headers X-Forwarded-For
+	}
+}
+
+(hardening) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+		-X-Powered-By
+	}
+}
+
+{$DOMAIN} {
+	import hardening
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+
+	# ── WebRTC (WHEP): создание сессии ───────────────────────────────────────
+	# Пускаем строго POST /whep/<path>/whep — служебные страницы MediaMTX
+	# (публикация, встроенный плеер) наружу не доступны в принципе.
+	@whep_create {
+		method POST
+		path_regexp ^/whep/[a-z0-9]{8,64}/whep$
+	}
+	handle @whep_create {
+		forward_auth api:8000 {
+			uri /internal/authz
+			copy_headers X-Mtx-Path X-Link-Id
+		}
+		uri strip_prefix /whep
+		reverse_proxy mediamtx:8889 {
+			# MediaMTX отдаёт Location сессии относительно своего корня —
+			# возвращаем клиенту адрес с нашим префиксом.
+			header_down Location "^/(.*)$" "/whep/${1}"
+		}
+	}
+
+	# ── WebRTC (WHEP): ICE-трickle и завершение сессии ───────────────────────
+	@whep_session {
+		method PATCH DELETE
+		path_regexp ^/whep/[a-z0-9]{8,64}/whep/[A-Za-z0-9_-]+$
+	}
+	handle @whep_session {
+		forward_auth api:8000 {
+			uri /internal/authz
+			copy_headers X-Mtx-Path X-Link-Id
+		}
+		uri strip_prefix /whep
+		reverse_proxy mediamtx:8889
+	}
+
+	# ── LL-HLS: плейлисты и сегменты ─────────────────────────────────────────
+	@hls {
+		method GET HEAD
+		path_regexp ^/hls/[a-z0-9]{8,64}/[A-Za-z0-9._-]+\.(m3u8|mp4|ts)$
+	}
+	handle @hls {
+		forward_auth api:8000 {
+			uri /internal/authz
+			copy_headers X-Mtx-Path X-Link-Id
+		}
+		uri strip_prefix /hls
+		reverse_proxy mediamtx:8888
+	}
+
+	# Всё остальное на медиа-префиксах — глухо закрыто.
+	handle /whep/* {
+		respond 404
+	}
+	handle /hls/* {
+		respond 404
+	}
+
+	# Служебные эндпоинты наружу не отдаём: Prometheus и docker healthcheck
+	# ходят напрямую внутри сети, минуя Caddy. /healthz оставлен открытым —
+	# он возвращает только «ok» и удобен для внешнего мониторинга доступности.
+	handle /metrics {
+		respond 404
+	}
+	handle /readyz {
+		respond 404
+	}
+
+	# ── Панель, страница просмотра, embed ────────────────────────────────────
+	# CSP выставляет само приложение (нужен per-response nonce).
+	handle {
+		reverse_proxy api:8000 {
+			header_up X-Real-IP {client_ip}
+		}
+	}
+}

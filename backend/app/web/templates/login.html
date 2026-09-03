@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Вход — {{ app_name }}{% endblock %}
+{% block content %}
+<div class="card card-narrow">
+  <h1>Вход</h1>
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>Электронная почта
+      <input type="email" name="email" value="{{ email|default('') }}" required autofocus
+             autocomplete="username">
+    </label>
+    <label>Пароль
+      <input type="password" name="password" required autocomplete="current-password">
+    </label>
+    <button type="submit" class="primary">Войти</button>
+  </form>
+</div>
+{% endblock %}

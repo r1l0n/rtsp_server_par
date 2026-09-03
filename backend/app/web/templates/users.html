@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Пользователи — {{ app_name }}{% endblock %}
+{% block content %}
+<h1>Пользователи</h1>
+
+<section class="card">
+  <h2>Создать пользователя</h2>
+  <form method="post" action="/admin/users" class="row-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Электронная почта
+      <input type="email" name="email" required maxlength="320" autocomplete="off">
+    </label>
+    <label>Имя
+      <input type="text" name="full_name" maxlength="200">
+    </label>
+    <label>Роль
+      <select name="role">
+        <option value="operator" selected>Оператор — свои камеры и ссылки</option>
+        <option value="admin">Администратор — всё</option>
+        <option value="viewer">Наблюдатель — только просмотр</option>
+      </select>
+    </label>
+    <label>Временный пароль
+      <input type="password" name="password" required minlength="12" autocomplete="new-password">
+      <span class="hint">Пользователь сменит его при первом входе.</span>
+    </label>
+    <button type="submit" class="primary">Создать</button>
+  </form>
+</section>
+
+<section class="card">
+  <table class="table">
+    <thead><tr><th>Почта</th><th>Имя</th><th>Роль</th><th>2FA</th><th>Вход</th><th></th></tr></thead>
+    <tbody>
+      {% for u in users %}
+      <tr class="{{ '' if u.is_active else 'row-off' }}">
+        <td>{{ u.email }}</td>
+        <td>{{ u.full_name or '—' }}</td>
+        <td>
+          <form method="post" action="/admin/users/{{ u.id }}/role" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <select name="role" {% if u.id == user.id %}disabled{% endif %}>
+              {% for r in ['admin', 'operator', 'viewer'] %}
+                <option value="{{ r }}" {% if u.role.value == r %}selected{% endif %}>{{ r }}</option>
+              {% endfor %}
+            </select>
+            {% if u.id != user.id %}<button type="submit">Сменить</button>{% endif %}
+          </form>
+        </td>
+        <td>{% if u.totp_enabled %}<span class="badge badge-on">вкл</span>
+            {% else %}<span class="badge badge-off">выкл</span>{% endif %}</td>
+        <td class="muted small">
+          {{ u.last_login_at.strftime('%d.%m.%Y %H:%M') if u.last_login_at else 'ни разу' }}
+        </td>
+        <td class="row-actions">
+          {% if u.id != user.id %}
+          <form method="post" action="/admin/users/{{ u.id }}/toggle" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">{{ 'Отключить' if u.is_active else 'Включить' }}</button>
+          </form>
+          {% endif %}
+          {% if u.totp_enabled %}
+          <form method="post" action="/admin/users/{{ u.id }}/reset-2fa" class="inline"
+                data-confirm="Сбросить второй фактор у {{ u.email }}? До повторной настройки вход будет защищён только паролем.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="danger">Сбросить 2FA</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

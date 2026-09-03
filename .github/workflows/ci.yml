@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Установка зависимостей
+        run: pip install -e ".[dev]"
+
+      - name: Линтер
+        run: ruff check app alembic tests
+
+      # Тесты не требуют ни Postgres, ни Redis: Redis подменяется на
+      # in-memory, схема сверяется с миграциями офлайн через рендер SQL.
+      - name: Тесты
+        run: pytest -q
+
+      - name: Уязвимости в зависимостях
+        run: pip-audit --strict --desc
+        continue-on-error: true
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Сборка образа
+        run: docker build -t rtspgw-api:ci backend
+
+      - name: Сканирование образа
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: rtspgw-api:ci
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверка docker-compose
+        run: |
+          cp .env.example .env
+          mkdir -p secrets && echo placeholder > secrets/app_key
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config --quiet
+        env:
+          GRAFANA_PASSWORD: ci-placeholder

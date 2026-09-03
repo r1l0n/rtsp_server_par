@@ -1,0 +1,39 @@
+# Необязательная надстройка с мониторингом.
+#
+#     docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+#
+# Grafana публикуется только на localhost: ходить в неё через SSH-туннель
+# (ssh -L 3000:localhost:3000 user@сервер), а не открывать наружу.
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      - --web.listen-address=:9090
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    networks: [core]
+    security_opt: ["no-new-privileges:true"]
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?задайте GRAFANA_PASSWORD в .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks: [core]
+    depends_on: [prometheus]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  prometheus_data:
+  grafana_data:

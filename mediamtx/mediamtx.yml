@@ -1,0 +1,118 @@
+# =============================================================================
+# MediaMTX 1.20.x — только глобальные настройки.
+#
+# ВАЖНО: секция `paths` намеренно пустая. Источник истины по камерам —
+# PostgreSQL, пути создаются и удаляются реконсилятором через Control API
+# (app/media/reconciler.py). Благодаря этому перезапуск MediaMTX не теряет
+# состояние: конфиг восстанавливается автоматически в течение 15 секунд.
+# Не добавляйте пути сюда руками — реконсилятор их удалит как «лишние».
+#
+# MediaMTX падает при старте на неизвестном ключе, поэтому набор ключей
+# сверен с mediamtx.yml тега v1.20.1. При обновлении образа — сверять заново.
+# =============================================================================
+
+logLevel: info
+logDestinations: [stdout]
+
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+udpMaxPayloadSize: 1452
+
+# --- Аутентификация ----------------------------------------------------------
+# Внешний доступ режет Caddy (forward_auth -> /internal/authz). Здесь второй
+# рубеж: жёсткая привязка к docker-подсетям на случай ошибки в сетевой схеме.
+# Пароли не используются намеренно: секрет в примонтированном read-only файле
+# было бы нечем ротировать, а разделение подсетей даёт тот же эффект.
+#   172.28.20.0/24 — сеть `core`: там живут api и worker (Control API, метрики).
+#   172.28.10.0/24 — сеть `edge`: там живёт только Caddy (чтение потоков).
+# Списки доверенных прокси (*TrustedProxies) НЕ включаем: иначе MediaMTX начнёт
+# брать IP из X-Forwarded-For и привязка к подсети перестанет работать.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: ['172.28.20.0/24', '127.0.0.1', '::1']
+    permissions:
+      - action: api
+      - action: metrics
+      - action: read
+      - action: playback
+      # publish — только для локального ffmpeg профиля transcode (см. rtspAddress).
+      - action: publish
+  - user: any
+    pass:
+    ips: ['172.28.10.0/24']
+    permissions:
+      - action: read
+
+# --- Control API и метрики (доступны только из сети core) --------------------
+api: yes
+apiAddress: :9997
+metrics: yes
+metricsAddress: :9998
+pprof: no
+playback: no
+
+# --- Входящие протоколы ------------------------------------------------------
+# Снаружи сервис не принимает ничего: RTSP слушает ТОЛЬКО loopback внутри
+# контейнера. Это нужно единственному потребителю — ffmpeg, который при профиле
+# transcode запускается через runOnDemand в этом же контейнере и публикует
+# перекодированный поток обратно. Порт 8554 не опубликован в docker и не
+# доступен даже из других контейнеров.
+rtsp: yes
+rtspAddress: 127.0.0.1:8554
+rtspTransports: [tcp]
+rtspEncryption: "no"
+rtspAuthMethods: [basic]
+rtspTrustedProxies: []
+
+rtmp: no
+srt: no
+
+# --- LL-HLS (фолбэк для сетей без UDP и для iOS) -----------------------------
+hls: yes
+hlsAddress: :8888
+hlsEncryption: no
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
+hlsAlwaysRemux: no
+hlsMuxerCloseAfter: 60s
+hlsAllowOrigins: ['*']
+hlsDirectory: ""
+
+# --- WebRTC (основной транспорт) ---------------------------------------------
+webrtc: yes
+webrtcAddress: :8889
+# Сигналинг ходит по HTTP внутри docker-сети; TLS терминирует Caddy.
+# Само медиа всегда шифруется DTLS-SRTP независимо от этой опции.
+webrtcEncryption: no
+webrtcAllowOrigins: ['*']
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: ""
+# В контейнере адреса интерфейсов — это внутренние docker-IP, для браузера они
+# бесполезны. Публичный адрес приходит из MTX_WEBRTCADDITIONALHOSTS (см. compose).
+webrtcIPsFromInterfaces: no
+webrtcAdditionalHosts: []
+# STUN/TURN не нужен, пока у VPS публичный IP и открыт 8189/udp.
+# Для сетей, режущих UDP, работает HLS-фолбэк. Если понадобится coturn —
+# прописать сюда: [{url: 'turn:...', username: '...', password: '...'}]
+webrtcICEServers2: []
+
+# --- Значения по умолчанию для путей -----------------------------------------
+pathDefaults:
+  source: publisher
+  sourceOnDemand: no
+  sourceOnDemandStartTimeout: 10s
+  sourceOnDemandCloseAfter: 60s
+  # TCP-транспорт для RTSP: надёжнее через интернет и NAT, чем UDP.
+  rtspTransport: tcp
+  rtspAnyPort: no
+  sourceRedirect: ""
+  maxReaders: 0
+  record: no
+
+paths: {}

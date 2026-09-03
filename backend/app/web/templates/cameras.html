@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Камеры — {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Камеры</h1>
+  <a class="button primary" href="/cameras/new">Добавить камеру</a>
+</div>
+
+{% if not cameras %}
+  <div class="empty">
+    <p>Пока ни одной камеры. Добавьте первую — понадобится RTSP-ссылка вида
+       <code>rtsp://логин:пароль@адрес:порт/поток</code>.</p>
+  </div>
+{% else %}
+<div class="grid">
+  {% for camera in cameras %}
+  <a class="tile" href="/cameras/{{ camera.id }}">
+    <div class="tile-preview">
+      <img src="/cameras/{{ camera.id }}/snapshot.jpg" alt="" loading="lazy">
+    </div>
+    <div class="tile-body">
+      <div class="tile-title">{{ camera.name }}</div>
+      <div class="tile-meta">
+        <span class="status status-{{ camera.status.value }}">{{ camera.status.value }}</span>
+        <span class="muted">{{ link_counts.get(camera.id, 0) }} ссылок</span>
+      </div>
+      {% if camera.probe and camera.probe.video_codec %}
+        <div class="muted small">
+          {{ camera.probe.video_codec|upper }}
+          {%- if camera.probe.width %} · {{ camera.probe.width }}×{{ camera.probe.height }}{% endif %}
+          {%- if camera.probe.fps %} · {{ camera.probe.fps }} fps{% endif %}
+        </div>
+      {% endif %}
+      {% if not camera.is_enabled %}<div class="badge">выключена</div>{% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
