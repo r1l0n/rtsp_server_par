@@ -177,6 +177,11 @@ networks:
       config: [{subnet: 172.28.30.0/24}]
 
 secrets:
+  # Файл монтируется в контейнер как есть — с владельцем и правами, которые он
+  # имеет на хосте (uid/gid/mode в этой секции работают только в swarm).
+  # Поэтому ключ должен принадлежать uid 10001 — тому же, под которым работает
+  # процесс приложения (см. useradd в backend/Dockerfile). Это делает install.sh;
+  # вручную: chown 10001:10001 secrets/app_key && chmod 400 secrets/app_key
   app_key:
     file: ./secrets/app_key
 

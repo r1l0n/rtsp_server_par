@@ -83,6 +83,15 @@ class Settings(BaseSettings):
         if self.app_secret_key_file is not None:
             try:
                 raw = self.app_secret_key_file.read_text(encoding="utf-8")
+            except PermissionError as exc:
+                # Типовая причина: файл на хосте принадлежит root с правами 600,
+                # а процесс в контейнере работает под непривилегированным uid.
+                # Docker монтирует секрет как есть, права хоста сохраняются.
+                raise ConfigError(
+                    f"нет прав на чтение APP_SECRET_KEY_FILE={self.app_secret_key_file}. "
+                    f"На хосте выполните: chown 10001:10001 secrets/app_key && "
+                    f"chmod 400 secrets/app_key"
+                ) from exc
             except OSError as exc:
                 raise ConfigError(
                     f"не удалось прочитать APP_SECRET_KEY_FILE={self.app_secret_key_file}: {exc}"

@@ -113,9 +113,15 @@ openssl rand -base64 30
 отдельным файлом и монтируется как docker secret.
 
 ```bash
-docker compose run --rm --no-deps api python -m app.cli gen-key > secrets/app_key
-chmod 600 secrets/app_key
+openssl rand -base64 32 > secrets/app_key
+chown 10001:10001 secrets/app_key && chmod 400 secrets/app_key
 ```
+
+`chown` обязателен. Docker монтирует файл секрета в контейнер как есть,
+сохраняя владельца и права хоста, а процесс приложения работает под
+непривилегированным uid 10001 (см. `useradd` в `backend/Dockerfile`).
+Файл, принадлежащий root с правами 600, он прочитать не сможет и упадёт
+на старте с `Permission denied`.
 
 **Сохраните копию ключа в менеджере паролей компании.** Без него дамп базы
 бесполезен: камеры придётся заводить заново.

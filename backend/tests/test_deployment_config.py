@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "docker-compose.yml"
 CADDYFILE = ROOT / "Caddyfile"
 MEDIAMTX = ROOT / "mediamtx" / "mediamtx.yml"
+INSTALL_SH = ROOT / "install.sh"
+DOCKERFILE = ROOT / "backend" / "Dockerfile"
 
 
 @pytest.fixture(scope="module")
@@ -67,6 +69,32 @@ def test_redis_command_uses_space_separated_options(compose: dict) -> None:
     assert "=" not in command, "redis-server не поддерживает --опция=значение"
     assert "--appendonly yes" in command
     assert "--maxmemory-policy noeviction" in command
+
+
+def test_key_file_owner_matches_container_user() -> None:
+    """UID владельца ключа обязан совпадать с UID процесса в контейнере.
+
+    Docker монтирует файл секрета как есть, вместе с владельцем и правами
+    хоста (uid/gid/mode в секции secrets работают только в swarm). Если
+    установщик отдаст ключ не тому uid, приложение упадёт на старте с
+    «Permission denied» — а по логу compose это выглядит просто как
+    «container is unhealthy».
+    """
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    match = re.search(r"useradd[^\n]*--uid\s+(\d+)", dockerfile)
+    assert match, "в Dockerfile не найден useradd --uid"
+    container_uid = match.group(1)
+
+    install = INSTALL_SH.read_text(encoding="utf-8")
+    declared = re.search(r"^APP_UID=(\d+)", install, re.MULTILINE)
+    assert declared, "в install.sh не объявлен APP_UID"
+    assert declared.group(1) == container_uid, (
+        f"install.sh отдаёт ключ uid={declared.group(1)}, "
+        f"а контейнер работает под uid={container_uid}"
+    )
+
+    assert 'chown "$APP_UID:$APP_UID" secrets/app_key' in install
+    assert "chmod 400 secrets/app_key" in install
 
 
 def test_storage_services_have_no_published_ports(compose: dict) -> None:

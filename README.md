@@ -59,7 +59,8 @@ cp .env.example .env && $EDITOR .env
 ```
 
 ```bash
-openssl rand -base64 32 > secrets/app_key && chmod 600 secrets/app_key
+openssl rand -base64 32 > secrets/app_key
+chown 10001:10001 secrets/app_key && chmod 400 secrets/app_key
 ```
 
 ```bash
