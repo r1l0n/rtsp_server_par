@@ -195,6 +195,35 @@ def _register_error_handlers(app: FastAPI) -> None:
             message=str(exc.detail) if exc.status_code != 404 else "Страница не найдена.",
         )
 
+    @app.exception_handler(Exception)
+    async def _unhandled(request: Request, exc: Exception) -> Response:
+        """Последний рубеж: страница с кодом запроса вместо «Internal Server Error».
+
+        Трассировка уже записана middleware'ом под тем же request_id, поэтому
+        по коду со страницы причина находится одной командой. Без этого
+        пятисотка выглядит как строка текста в браузере и не оставляет
+        никакой зацепки — ни пользователю, ни тому, кто будет чинить.
+        """
+        request_id = getattr(request.state, "request_id", "")
+
+        if request.url.path.startswith(("/internal/", "/static/")):
+            # Тут HTML некому читать: forward_auth разбирает код, а не страницу.
+            return Response(status_code=500, headers={"X-Request-Id": request_id})
+
+        response = render(
+            request,
+            "error.html",
+            status_code=500,
+            message=(
+                "Внутренняя ошибка сервиса. Действие не выполнено — "
+                "повторите попытку или сообщите код запроса администратору."
+            ),
+        )
+        # Заголовок обычно проставляет middleware, но при необработанной
+        # ошибке он до этого не доходит: ответ рождается уже здесь.
+        response.headers["X-Request-Id"] = request_id
+        return response
+
     @app.exception_handler(RequestValidationError)
     async def _validation(request: Request, exc: RequestValidationError) -> Response:
         # Тело ошибки FastAPI показывает имена и значения полей — наружу это

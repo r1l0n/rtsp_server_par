@@ -146,7 +146,15 @@ async def camera_preview(
         audio_enabled=audio_enabled == "on",
         is_enabled=True,
     )
-    report = await diagnose(draft, target.url, None)
+    try:
+        report = await diagnose(draft, target.url, None)
+    except Exception:
+        log.exception("preview_crashed", host=target.host, port=target.port)
+        return render(
+            request, "camera_form.html", status_code=500, user=user, camera=None, form=form,
+            error="Проверка не завершилась из-за внутренней ошибки. Причина "
+                  "записана в журнал сервиса под кодом этого запроса.",
+        )
 
     log.info(
         "camera_previewed",
@@ -375,7 +383,16 @@ async def camera_diagnose(
                   "Введите RTSP-ссылку заново.",
         )
 
-    report = await diagnose(camera, rtsp_url, get_mtx())
+    try:
+        report = await diagnose(camera, rtsp_url, get_mtx())
+    except Exception:
+        # Проверка обязана довести оператора до ответа даже когда падает сама.
+        log.exception("diagnose_crashed", camera_id=str(camera.id))
+        return await _render_detail(
+            request, db, user, camera,
+            error="Проверка не завершилась из-за внутренней ошибки. Причина "
+                  "записана в журнал сервиса под кодом этого запроса.",
+        )
 
     # Результат пробы кладём в БД: worker больше не будет перепробовать камеру,
     # а список камер сразу покажет актуальный статус.

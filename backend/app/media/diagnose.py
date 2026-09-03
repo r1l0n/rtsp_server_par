@@ -364,15 +364,22 @@ async def _probe_endpoint(url: str, method: str = "GET", **kwargs: object) -> Pr
             # Один шаг по редиректу проходим вручную: знать, ЧЕМ отвечает
             # конечный адрес, важнее, чем сам факт 3xx.
             if 300 <= response.status_code < 400 and probe.location:
-                landing = await client.request(
-                    method, response.headers["location"], **kwargs
-                )  # type: ignore[arg-type]
+                # Location у MediaMTX относительный («/<path>/»), поэтому его
+                # надо достроить до абсолютного — иначе запрос не отправится
+                # и мы потеряем сам факт редиректа.
+                target = response.url.join(probe.location)
+                landing = await client.request(method, target, **kwargs)  # type: ignore[arg-type]
                 probe.followed = (
                     f"{landing.status_code} {landing.headers.get('content-type', '')}".strip()
                 )
             return probe
-    except httpx.HTTPError as exc:
-        return Probe(error=str(exc)[:200])
+    except Exception as exc:
+        # Ловим всё намеренно. Это диагностический зонд: непредвиденная ошибка
+        # здесь обязана стать строкой отчёта, а не пятисоткой на всю страницу
+        # проверки. Мимо httpx.HTTPError проходит, например, httpx.InvalidURL —
+        # он наследуется прямо от Exception.
+        log.info("probe_failed", url=url, error=str(exc)[:200])
+        return Probe(error=f"{type(exc).__name__}: {exc}"[:200])
 
 
 async def _check_stream(camera: Camera, mtx: MediaMTXClient) -> list[tuple[str, str, str, str]]:

@@ -45,6 +45,7 @@ def render(
     context.setdefault("user", user or getattr(request.state, "user", None))
     context.setdefault("status_code", status_code)
     context["csp_nonce"] = getattr(request.state, "csp_nonce", "")
+    context["request_id"] = getattr(request.state, "request_id", "")
     context["csrf_token"] = session.csrf if session else ""
     return templates.TemplateResponse(request, template, context, status_code=status_code)
 
