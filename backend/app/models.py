@@ -94,6 +94,64 @@ class User(Base):
     )
 
 
+class MailSecurity(enum.StrEnum):
+    #: Обычный submission-порт 587: соединение открывается открытым и
+    #: шифруется командой STARTTLS.
+    starttls = "starttls"
+    #: Implicit TLS на 465 — шифрование с первого байта.
+    ssl = "ssl"
+    #: Без шифрования. Осмысленно только для релея в своей же сети.
+    none = "none"
+
+
+class MailSettings(Base):
+    """Настройки SMTP, заданные в панели. Ровно одна строка.
+
+    Почту настраивает администратор через интерфейс, а не правкой `.env`:
+    сервис ставят один раз, а почтовый ящик меняют куда чаще, и лезть за этим
+    на сервер незачем. Значения из окружения остаются запасным вариантом —
+    пока этой строки нет, работает то, что задано в `.env`.
+    """
+
+    __tablename__ = "mail_settings"
+
+    #: Единственная строка. Ограничение стоит на уровне БД, чтобы вторая
+    #: строка не появилась ни из миграции, ни руками из psql.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False, default=1)
+
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    host: Mapped[str] = mapped_column(String(255), default="")
+    port: Mapped[int] = mapped_column(Integer, default=587)
+    security: Mapped[MailSecurity] = mapped_column(
+        Enum(MailSecurity, name="mail_security"), default=MailSecurity.starttls
+    )
+    username: Mapped[str] = mapped_column(String(320), default="")
+    #: Пароль SMTP шифруется тем же ключом, что и креды камер: в дампе базы
+    #: его быть не должно так же, как и пароля от камеры.
+    password_enc: Mapped[bytes | None] = mapped_column(LargeBinary, default=None)
+
+    mail_from: Mapped[str] = mapped_column(String(320), default="")
+    from_name: Mapped[str] = mapped_column(String(200), default="RTSP Gateway")
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=15)
+
+    #: Когда последний раз удалось отправить письмо — «работает ли почта»
+    #: без чтения логов.
+    last_success_at: Mapped[dt.datetime | None] = mapped_column(TS, default=None)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+
+    updated_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        TS, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_mail_settings_singleton"),
+        CheckConstraint("port > 0 AND port <= 65535", name="ck_mail_settings_port"),
+    )
+
+
 class Invitation(Base):
     """Приглашение сотрудника: письмо со ссылкой, по которой он задаёт пароль.
 

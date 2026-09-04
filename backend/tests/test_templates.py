@@ -58,7 +58,14 @@ import datetime as dt  # noqa: E402
 import types  # noqa: E402
 import uuid  # noqa: E402
 
-from app.models import Invitation, Role, User  # noqa: E402
+from app.crypto import get_cipher  # noqa: E402
+from app.models import (  # noqa: E402
+    Invitation,
+    MailSecurity,
+    MailSettings,
+    Role,
+    User,
+)
 
 
 def _request_stub() -> types.SimpleNamespace:
@@ -110,6 +117,51 @@ def test_users_page_offers_the_link_when_mail_failed() -> None:
     )
     assert "https://cam.test/invite/TOKEN" in html
     assert "copybutton" in html
+
+
+def test_mail_settings_page_never_returns_the_password() -> None:
+    """Сохранённый пароль SMTP не должен уезжать обратно в браузер."""
+    from app import mail
+
+    admin = User(id=uuid.uuid4(), email="admin@example.com", role=Role.admin)
+    row = MailSettings(
+        id=1, enabled=True, host="smtp.panel.example", port=465,
+        security=MailSecurity.ssl, username="bot",
+        password_enc=get_cipher().encrypt("секрет-smtp"),
+        mail_from="noreply@panel.example", from_name="Панель",
+        timeout_seconds=20, last_error="",
+    )
+    html = templates.env.get_template("mail_settings.html").render(
+        request=_request_stub(),
+        user=admin,
+        row=row,
+        config=mail.config_from_row(row),
+        form=None,
+        env_host="",
+        csrf_token="t",
+    )
+    assert "секрет-smtp" not in html
+    assert "smtp.panel.example" in html
+    assert 'action="/admin/mail/test"' in html
+
+
+def test_mail_settings_page_works_without_a_saved_row() -> None:
+    """Пока настроек нет, форма показывает то, что задано окружением."""
+    from app import mail
+    from app.config import Settings
+
+    admin = User(id=uuid.uuid4(), email="admin@example.com", role=Role.admin)
+    html = templates.env.get_template("mail_settings.html").render(
+        request=_request_stub(),
+        user=admin,
+        row=None,
+        config=mail.config_from_env(Settings(smtp_host="smtp.env.example")),
+        form=None,
+        env_host="smtp.env.example",
+        csrf_token="t",
+    )
+    assert "smtp.env.example" in html
+    assert ".env" in html
 
 
 def test_invite_page_posts_back_to_its_own_token() -> None:

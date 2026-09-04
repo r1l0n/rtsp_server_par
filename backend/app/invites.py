@@ -161,11 +161,13 @@ def _render_email(invitation: Invitation, token: str, inviter: User) -> tuple[st
     return text, html_body
 
 
-async def send_email(invitation: Invitation, token: str, inviter: User) -> None:
+async def send_email(
+    invitation: Invitation, token: str, inviter: User, config: mail.MailConfig
+) -> None:
     """Отправляет письмо. Бросает mail.MailError, если не получилось."""
     text_body, html_body = _render_email(invitation, token, inviter)
     await mail.send(
-        to=invitation.email, subject=SUBJECT, text_body=text_body, html_body=html_body
+        config, to=invitation.email, subject=SUBJECT, text_body=text_body, html_body=html_body
     )
     invitation.sent_at = dt.datetime.now(dt.UTC)
 

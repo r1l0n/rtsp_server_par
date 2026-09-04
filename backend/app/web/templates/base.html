@@ -21,6 +21,7 @@
       <a href="/" {% if request.url.path == '/' or request.url.path.startswith('/cameras') %}aria-current="page"{% endif %}>Камеры</a>
       {% if user.role == Role.admin %}
         <a href="/admin/users" {% if request.url.path.startswith('/admin/users') %}aria-current="page"{% endif %}>Пользователи</a>
+        <a href="/admin/mail" {% if request.url.path.startswith('/admin/mail') %}aria-current="page"{% endif %}>Почта</a>
         <a href="/admin/audit" {% if request.url.path.startswith('/admin/audit') %}aria-current="page"{% endif %}>Журнал</a>
       {% endif %}
     </nav>

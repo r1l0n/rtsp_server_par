@@ -35,6 +35,9 @@ INVITE_BY_IP = Limit(limit=30, window=600)
 #: Отправка приглашений одним администратором — чтобы панель нельзя было
 #: превратить в рассыльщик спама с нашего домена (и сжечь репутацию SMTP).
 INVITE_SEND_BY_ACTOR = Limit(limit=30, window=3600)
+#: Проверочные письма: кнопка «Отправить проверочное письмо» не должна
+#: превращаться в способ долбить чужой SMTP с нашего адреса.
+MAIL_TEST_BY_ACTOR = Limit(limit=10, window=600)
 
 
 async def hit(bucket: str, key: str, limit: Limit) -> Decision:

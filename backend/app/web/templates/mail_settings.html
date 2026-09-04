@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Почта — {{ app_name }}{% endblock %}
+{% block container_class %}container-narrow{% endblock %}
+{% block content %}
+
+{# Форма после неудачного сохранения показывает введённое, иначе — то,
+   что лежит в базе (а если строки ещё нет — значения из окружения). #}
+{% set v = form or {
+     'host': config.host, 'port': config.port, 'security': config.security,
+     'username': config.username, 'mail_from': config.sender,
+     'from_name': config.from_name, 'timeout_seconds': config.timeout,
+     'enabled': config.enabled } %}
+
+<div class="page-head">
+  <div>
+    <h1>Почта</h1>
+    <div class="subtitle">SMTP-сервер, через который уходят приглашения сотрудникам</div>
+  </div>
+  {% if config.enabled %}<span class="tag tag-ok">включена</span>
+  {% else %}<span class="tag tag-off">выключена</span>{% endif %}
+</div>
+
+{% if config.source == 'env' and env_host %}
+<div class="alert alert-ok">
+  Сейчас действуют настройки из файла <code>.env</code> ({{ config.summary }}).
+  Как только вы сохраните форму ниже, служить источником истины начнёт панель,
+  а значения из файла станут неактуальны.
+</div>
+{% endif %}
+
+{% if row and row.last_error %}
+<div class="alert alert-error">
+  <strong>Последняя отправка не удалась.</strong>
+  <p>{{ row.last_error }}</p>
+</div>
+{% endif %}
+
+<section class="card">
+  <form method="post" action="/admin/mail">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <label class="check">
+      <input type="checkbox" name="enabled" value="1" {% if v.enabled %}checked{% endif %}>
+      <span>Отправлять письма
+        <span class="hint">Пока выключено, приглашения выпускаются, но панель показывает
+          ссылку администратору вместо отправки письма.</span>
+      </span>
+    </label>
+
+    <fieldset>
+      <legend>Сервер</legend>
+      <div class="field-row">
+        <div class="field">
+          <label for="mail-host">Адрес SMTP-сервера</label>
+          <input id="mail-host" type="text" name="host" maxlength="255"
+                 value="{{ v.host }}" placeholder="smtp.yandex.ru" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="mail-port">Порт</label>
+          <input id="mail-port" type="number" name="port" min="1" max="65535"
+                 value="{{ v.port }}">
+        </div>
+        <div class="field">
+          <label for="mail-security">Шифрование</label>
+          <select id="mail-security" name="security">
+            <option value="starttls" {% if v.security == 'starttls' %}selected{% endif %}>
+              STARTTLS — порт 587</option>
+            <option value="ssl" {% if v.security == 'ssl' %}selected{% endif %}>
+              SSL/TLS — порт 465</option>
+            <option value="none" {% if v.security == 'none' %}selected{% endif %}>
+              Без шифрования</option>
+          </select>
+          <span class="hint">«Без шифрования» — только для релея в своей сети</span>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Авторизация</legend>
+      <div class="field-row">
+        <div class="field">
+          <label for="mail-username">Логин</label>
+          <input id="mail-username" type="text" name="username" maxlength="320"
+                 value="{{ v.username }}" autocomplete="off"
+                 placeholder="пусто — без авторизации">
+        </div>
+        <div class="field">
+          <label for="mail-password">Пароль</label>
+          <input id="mail-password" type="password" name="password" autocomplete="new-password"
+                 placeholder="{% if row and row.password_enc %}сохранён — оставьте пустым{% else %}не задан{% endif %}">
+          <span class="hint">Пустое поле оставляет прежний пароль. Хранится зашифрованным.</span>
+        </div>
+      </div>
+      {% if row and row.password_enc %}
+      <label class="check">
+        <input type="checkbox" name="clear_password" value="1">
+        <span>Удалить сохранённый пароль
+          <span class="hint">Если сервер перестал требовать авторизацию.</span>
+        </span>
+      </label>
+      {% endif %}
+    </fieldset>
+
+    <fieldset>
+      <legend>Отправитель</legend>
+      <div class="field-row">
+        <div class="field">
+          <label for="mail-from">Адрес «От кого»</label>
+          <input id="mail-from" type="email" name="mail_from" maxlength="320"
+                 value="{{ v.mail_from }}" autocomplete="off">
+          <span class="hint">Обычно совпадает с логином — иначе письма уйдут в спам</span>
+        </div>
+        <div class="field">
+          <label for="mail-name">Имя отправителя</label>
+          <input id="mail-name" type="text" name="from_name" maxlength="200"
+                 value="{{ v.from_name }}">
+        </div>
+        <div class="field">
+          <label for="mail-timeout">Таймаут, с</label>
+          <input id="mail-timeout" type="number" name="timeout_seconds" min="1" max="120"
+                 value="{{ v.timeout_seconds }}">
+          <span class="hint">Сколько ждать сервер, прежде чем считать отправку неудачной</span>
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Сохранить</button>
+    </div>
+  </form>
+
+  <div class="danger-zone">
+    <div class="switch-row">
+      <div>
+        <strong>Проверить настройки</strong>
+        <span class="hint">Отправим письмо на {{ user.email }} — вашему собственному адресу.
+          Сохраните изменения до проверки: письмо уходит по тому, что лежит в базе.</span>
+      </div>
+      <form method="post" action="/admin/mail/test" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-secondary">Отправить проверочное письмо</button>
+      </form>
+    </div>
+    {% if row and row.last_success_at %}
+    <p class="hint">Последнее успешно отправленное письмо:
+       {{ row.last_success_at.strftime('%d.%m.%Y %H:%M') }} UTC.</p>
+    {% endif %}
+  </div>
+</section>
+
+<p class="hint">
+  Изменения действуют сразу — перезапускать сервис не нужно. Пароль SMTP
+  шифруется тем же ключом, что и учётные данные камер, и в интерфейс не
+  возвращается никогда.
+</p>
+{% endblock %}

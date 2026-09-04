@@ -1,8 +1,9 @@
-"""Приглашения сотрудников: адреса, письмо, SMTP-транспорт.
+"""Приглашения сотрудников: адреса, письмо, настройки SMTP, транспорт.
 
 Работа с базой здесь не проверяется — в тестовом окружении её нет. Проверено
-всё, что можно проверить без неё: разбор адреса, содержимое письма, порядок
-команд SMTP и защита заголовков от подстановки переводов строк.
+всё, что можно проверить без неё: разбор адреса, содержимое письма, выбор
+источника настроек (панель против `.env`), порядок команд SMTP и защита
+заголовков от подстановки переводов строк.
 """
 
 from __future__ import annotations
@@ -16,7 +17,26 @@ import pytest
 
 from app import invites, mail
 from app.config import Settings
-from app.models import Invitation, Role, User
+from app.crypto import get_cipher
+from app.models import Invitation, MailSecurity, MailSettings, Role, User
+
+
+def _config(**kwargs: object) -> mail.MailConfig:
+    """Параметры отправки с разумными значениями по умолчанию."""
+    base: dict[str, object] = {
+        "enabled": True,
+        "host": "smtp.example.com",
+        "port": 587,
+        "security": "starttls",
+        "username": "",
+        "password": "",
+        "sender": "noreply@cam.test",
+        "from_name": "RTSP Gateway",
+        "timeout": 15,
+        "source": "panel",
+    }
+    base.update(kwargs)
+    return mail.MailConfig(**base)  # type: ignore[arg-type]
 
 
 # ─── Адрес ───────────────────────────────────────────────────────────────────
@@ -47,10 +67,19 @@ def test_bad_email_is_rejected(raw: str) -> None:
         invites.normalize_email(raw)
 
 
-def test_email_with_newline_is_rejected() -> None:
+def test_email_with_newline_inside_is_rejected() -> None:
     """Перевод строки в адресе — это попытка дописать заголовки письма."""
     with pytest.raises(invites.InviteError):
         invites.normalize_email("victim@example.com\nBcc: everyone@example.com")
+
+
+def test_trailing_newline_is_stripped_not_smuggled() -> None:
+    """Хвостовой перевод строки срезается — в заголовок он попасть не может.
+
+    Проверка именно на это: в Python «$» совпадает и перед завершающим \\n,
+    поэтому регулярка стоит на \\A…\\Z, а сам символ убирает strip().
+    """
+    assert invites.normalize_email("victim@example.com\n") == "victim@example.com"
 
 
 def test_invite_url_points_at_own_domain() -> None:
@@ -119,16 +148,26 @@ def test_expiry_is_compared_against_now() -> None:
 # ─── Сборка сообщения ────────────────────────────────────────────────────────
 def test_message_has_both_plain_text_and_html() -> None:
     message = mail.build_message(
-        to="new@example.com", subject="Тема", text_body="текст", html_body="<b>текст</b>"
+        _config(),
+        to="new@example.com",
+        subject="Тема",
+        text_body="текст",
+        html_body="<b>текст</b>",
     )
     types = {part.get_content_type() for part in message.walk()}
     assert "text/plain" in types
     assert "text/html" in types
 
 
-def test_message_from_defaults_to_own_domain() -> None:
-    message = mail.build_message(to="new@example.com", subject="Тема", text_body="текст")
-    assert "noreply@cam.test" in message["From"]
+def test_message_from_uses_the_configured_sender() -> None:
+    message = mail.build_message(
+        _config(sender="noreply@panel.example", from_name="Панель"),
+        to="new@example.com",
+        subject="Тема",
+        text_body="текст",
+    )
+    assert "noreply@panel.example" in message["From"]
+    assert "Панель" in message["From"]
 
 
 @pytest.mark.parametrize(
@@ -142,14 +181,92 @@ def test_header_injection_is_refused(field: str, value: str) -> None:
     kwargs = {"to": "ok@example.com", "subject": "Тема", "text_body": "текст"}
     kwargs[field] = value
     with pytest.raises(mail.MailError):
-        mail.build_message(**kwargs)  # type: ignore[arg-type]
+        mail.build_message(_config(), **kwargs)  # type: ignore[arg-type]
+
+
+def test_header_injection_through_sender_name_is_refused() -> None:
+    """Имя отправителя тоже приходит из формы администратора."""
+    with pytest.raises(mail.MailError):
+        mail.build_message(
+            _config(from_name="Панель\r\nBcc: everyone@example.com"),
+            to="ok@example.com",
+            subject="Тема",
+            text_body="текст",
+        )
+
+
+# ─── Откуда берутся настройки ────────────────────────────────────────────────
+def _row(**kwargs: object) -> MailSettings:
+    base: dict[str, object] = {
+        "id": 1,
+        "enabled": True,
+        "host": "smtp.panel.example",
+        "port": 465,
+        "security": MailSecurity.ssl,
+        "username": "bot",
+        "password_enc": None,
+        "mail_from": "noreply@panel.example",
+        "from_name": "Панель",
+        "timeout_seconds": 20,
+        "last_error": "",
+    }
+    base.update(kwargs)
+    return MailSettings(**base)
+
+
+def test_panel_settings_replace_environment() -> None:
+    config = mail.config_from_row(_row())
+    assert config.source == "panel"
+    assert config.host == "smtp.panel.example"
+    assert config.port == 465
+    assert config.security == "ssl"
+    assert config.timeout == 20
+
+
+def test_disabled_row_disables_sending() -> None:
+    assert not mail.config_from_row(_row(enabled=False)).enabled
+
+
+def test_row_without_host_is_not_enabled() -> None:
+    """Галочка «отправлять» при пустом сервере не должна включать отправку."""
+    assert not mail.config_from_row(_row(host="  ")).enabled
+
+
+def test_stored_password_is_decrypted_for_sending() -> None:
+    row = _row(password_enc=get_cipher().encrypt("секрет-smtp"))
+    assert mail.config_from_row(row).password == "секрет-smtp"
+
+
+def test_undecryptable_password_does_not_break_sending() -> None:
+    """Сменили ключ шифрования — почта должна ругаться на авторизацию,
+    а не ронять страницу пятисоткой."""
+    config = mail.config_from_row(_row(password_enc=b"\x01not-a-secretbox-blob"))
+    assert config.password == ""
+    assert config.enabled
+
+
+def test_row_without_sender_falls_back_to_own_domain() -> None:
+    assert mail.config_from_row(_row(mail_from="")).sender == "noreply@cam.test"
+
+
+def test_environment_is_used_until_panel_settings_appear() -> None:
+    config = mail.config_from_env(Settings(smtp_host="smtp.env.example", smtp_port=2525))
+    assert config.source == "env"
+    assert config.host == "smtp.env.example"
+    assert config.enabled
+
+
+def test_mail_is_disabled_until_something_is_configured() -> None:
+    assert not mail.config_from_env(Settings()).enabled
 
 
 # ─── Транспорт ───────────────────────────────────────────────────────────────
-async def test_send_without_smtp_host_says_so() -> None:
-    """Без SMTP_HOST отправка обязана падать понятной ошибкой, а не молчать."""
+async def test_send_while_disabled_says_so() -> None:
+    """Выключенная почта обязана падать понятной ошибкой, а не молчать."""
     with pytest.raises(mail.MailNotConfigured):
-        await mail.send(to="new@example.com", subject="Тема", text_body="текст")
+        await mail.send(
+            _config(enabled=False), to="new@example.com", subject="Тема", text_body="текст"
+        )
 
 
 class _FakeSMTP:
@@ -192,16 +309,15 @@ def fake_smtp(monkeypatch: pytest.MonkeyPatch) -> type[_FakeSMTP]:
 
 
 def _message() -> object:
-    return mail.build_message(to="new@example.com", subject="Тема", text_body="текст")
+    return mail.build_message(
+        _config(), to="new@example.com", subject="Тема", text_body="текст"
+    )
 
 
 def test_starttls_happens_before_login(fake_smtp: type[_FakeSMTP]) -> None:
     """Логин до STARTTLS отдал бы пароль открытым текстом."""
-    settings = Settings(
-        smtp_host="smtp.example.com", smtp_port=587, smtp_security="starttls",
-        smtp_username="bot", smtp_password="s3cret",
-    )
-    mail._send_sync(settings, _message())  # type: ignore[arg-type]
+    config = _config(username="bot", password="s3cret")
+    mail._send_sync(config, _message())  # type: ignore[arg-type]
 
     calls = fake_smtp.instances[0].calls
     assert calls.index("starttls") < calls.index("login:bot:s3cret")
@@ -211,16 +327,21 @@ def test_starttls_happens_before_login(fake_smtp: type[_FakeSMTP]) -> None:
 
 
 def test_implicit_tls_does_not_call_starttls(fake_smtp: type[_FakeSMTP]) -> None:
-    settings = Settings(smtp_host="smtp.example.com", smtp_port=465, smtp_security="ssl")
-    mail._send_sync(settings, _message())  # type: ignore[arg-type]
+    config = _config(port=465, security="ssl")
+    mail._send_sync(config, _message())  # type: ignore[arg-type]
     assert "starttls" not in fake_smtp.instances[0].calls
 
 
 def test_login_is_skipped_without_username(fake_smtp: type[_FakeSMTP]) -> None:
     """Локальный релей часто пускает без авторизации."""
-    settings = Settings(smtp_host="mailhog", smtp_port=1025, smtp_security="none")
-    mail._send_sync(settings, _message())  # type: ignore[arg-type]
+    config = _config(host="mailhog", port=1025, security="none")
+    mail._send_sync(config, _message())  # type: ignore[arg-type]
     assert not any(call.startswith("login") for call in fake_smtp.instances[0].calls)
+
+
+def test_configured_timeout_reaches_the_client(fake_smtp: type[_FakeSMTP]) -> None:
+    mail._send_sync(_config(timeout=7), _message())  # type: ignore[arg-type]
+    assert fake_smtp.instances[0].timeout == 7
 
 
 def test_password_file_wins_over_env_variable(tmp_path) -> None:
@@ -228,8 +349,3 @@ def test_password_file_wins_over_env_variable(tmp_path) -> None:
     secret_file.write_text("из-файла\n", encoding="utf-8")
     settings = Settings(smtp_password="из-переменной", smtp_password_file=secret_file)
     assert settings.smtp_secret == "из-файла"
-
-
-def test_mail_is_disabled_until_host_is_set() -> None:
-    assert not Settings().mail_enabled
-    assert Settings(smtp_host="smtp.example.com").mail_enabled

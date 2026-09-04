@@ -36,6 +36,10 @@ INVITE_SEND_FAILED = "invite.send_failed"
 INVITE_REVOKED = "invite.revoked"
 INVITE_ACCEPTED = "invite.accepted"
 
+MAIL_SETTINGS_UPDATED = "mail.settings_updated"
+MAIL_TEST_SENT = "mail.test_sent"
+MAIL_TEST_FAILED = "mail.test_failed"
+
 CAMERA_CREATED = "camera.created"
 CAMERA_UPDATED = "camera.updated"
 CAMERA_DELETED = "camera.deleted"
