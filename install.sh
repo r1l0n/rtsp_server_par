@@ -472,6 +472,8 @@ collect_settings() {
         "all:Всем без исключения" \
         "optional:Никому не обязателен"
 
+    ask_smtp
+
     echo
     echo "  ${DIM}Пароль PostgreSQL человеком не вводится — он живёт только внутри${R}"
     echo "  ${DIM}docker-сети. Генерирую случайный.${R}"
@@ -486,6 +488,51 @@ collect_settings() {
     fi
 
     ask_remaining
+}
+
+# Почта. Нужна только для приглашений сотрудников, поэтому вопрос
+# необязательный: без SMTP приглашения всё равно выдаются, но ссылку из письма
+# панель показывает администратору, и передать её нужно самому.
+ask_smtp() {
+    SMTP_HOST=""
+    SMTP_PORT=587
+    SMTP_SECURITY=starttls
+    SMTP_USERNAME=""
+    SMTP_PASSWORD=""
+    MAIL_FROM=""
+
+    echo
+    echo "  ${DIM}Приглашение сотрудника — это письмо со ссылкой, по которой он${R}"
+    echo "  ${DIM}задаёт себе пароль. Без SMTP приглашения тоже работают: панель${R}"
+    echo "  ${DIM}покажет ссылку, и передать её нужно будет вручную.${R}"
+    confirm "Настроить отправку почты (SMTP)?" "нет" || return 0
+
+    ask SMTP_HOST "Адрес SMTP-сервера" "" \
+        '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' \
+        "Только имя хоста или IP — без схемы и порта (например smtp.yandex.ru)."
+
+    choose SMTP_SECURITY "Как шифруется соединение?" \
+        "starttls:STARTTLS на порту 587 — обычный вариант" \
+        "ssl:SSL/TLS на порту 465" \
+        "none:Без шифрования — только для релея внутри своей сети"
+
+    case "$SMTP_SECURITY" in
+        ssl) SMTP_PORT=465 ;;
+        none) SMTP_PORT=25 ;;
+        *) SMTP_PORT=587 ;;
+    esac
+    ask SMTP_PORT "Порт" "$SMTP_PORT" '^[0-9]+$' "Введите число."
+
+    # Логин необязателен: локальный релей часто принимает почту без него.
+    read -r -p "  Логин SMTP ${DIM}[пусто — без авторизации]${R}: " SMTP_USERNAME || \
+        die "ввод прерван"
+    if [ -n "$SMTP_USERNAME" ]; then
+        ask_secret SMTP_PASSWORD "Пароль SMTP" 1
+    fi
+
+    ask MAIL_FROM "Адрес отправителя" "${SMTP_USERNAME:-noreply@${DOMAIN}}" \
+        '^[^@[:space:]]+@[^@[:space:]]+\.[a-zA-Z]{2,}$' "Введите корректный адрес."
+    ok "Почта настроена: ${SMTP_HOST}:${SMTP_PORT} (${SMTP_SECURITY})"
 }
 
 # Вопросы, которые задаются в обоих случаях — и при первой установке,
@@ -555,7 +602,43 @@ DEFAULT_LINK_TTL_HOURS=24
 TOTP_POLICY=${TOTP_POLICY}
 ALLOW_PRIVATE_CAMERA_HOSTS=false
 CAMERA_HOST_ALLOWLIST=
+# Сколько живёт ссылка из письма-приглашения, часов
+INVITE_TTL_HOURS=72
 ENV
+
+    # ─── Почта ──────────────────────────────────────────────────────────────
+    # Без SMTP_HOST приглашения выпускаются, но письма не уходят: панель
+    # показывает ссылку администратору. Блок пишем всегда — чтобы было видно,
+    # что именно дописать, если почту решат подключить позже.
+    if [ -n "${SMTP_HOST:-}" ]; then
+        cat >> .env <<ENV
+
+# ─── Почта (приглашения сотрудников) ────────────────────────────────────────
+SMTP_HOST=${SMTP_HOST}
+SMTP_PORT=${SMTP_PORT}
+SMTP_SECURITY=${SMTP_SECURITY}
+SMTP_USERNAME=${SMTP_USERNAME}
+SMTP_PASSWORD=${SMTP_PASSWORD}
+MAIL_FROM=${MAIL_FROM}
+MAIL_FROM_NAME=RTSP Gateway
+ENV
+    else
+        cat >> .env <<'ENV'
+
+# ─── Почта (приглашения сотрудников) ────────────────────────────────────────
+# Не настроена: приглашения выпускаются, но письма не уходят — ссылку панель
+# показывает администратору. Чтобы включить, заполните и перезапустите:
+#   docker compose up -d api worker
+#SMTP_HOST=smtp.example.com
+#SMTP_PORT=587
+# starttls (587) | ssl (465) | none
+#SMTP_SECURITY=starttls
+#SMTP_USERNAME=noreply@example.com
+#SMTP_PASSWORD=
+#MAIL_FROM=noreply@example.com
+#MAIL_FROM_NAME=RTSP Gateway
+ENV
+    fi
 
     if [ -n "${ACME_CA:-}" ]; then
         printf '\n# Тестовый CA: сертификат недоверенный, зато без недельных лимитов.\nACME_CA=%s\n' \

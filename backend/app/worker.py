@@ -12,7 +12,7 @@ import contextlib
 import datetime as dt
 import signal
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, or_, select, update
 
 from .config import get_settings
 from .crypto import DecryptionError, get_cipher
@@ -22,13 +22,16 @@ from .media.mtx_client import MediaMTXError, close_mtx, get_mtx
 from .media.probe import probe_rtsp
 from .media.reconciler import reconcile, refresh_statuses
 from .media.snapshot import capture_snapshot
-from .models import Camera, CameraStatus, ViewSession
+from .models import Camera, CameraStatus, Invitation, ViewSession
 from .redis_client import close_redis
 
 log = get_logger("worker")
 
 SNAPSHOT_REFRESH_MINUTES = 30
 VIEW_SESSION_STALE_MINUTES = 5
+#: Через сколько дней отработавшее приглашение удаляется из таблицы.
+#: История остаётся в журнале аудита, а сама строка больше ни на что не влияет.
+INVITE_RETENTION_DAYS = 30
 
 
 async def _reconcile_cycle() -> None:
@@ -107,13 +110,27 @@ async def _snapshot_cycle() -> None:
 
 
 async def _cleanup_cycle() -> None:
-    """Закрывает сеансы просмотра, о которых давно ничего не слышно."""
-    stale_before = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=VIEW_SESSION_STALE_MINUTES)
+    """Закрывает забытые сеансы просмотра и убирает отработавшие приглашения."""
+    now = dt.datetime.now(dt.UTC)
+    stale_before = now - dt.timedelta(minutes=VIEW_SESSION_STALE_MINUTES)
+    invites_before = now - dt.timedelta(days=INVITE_RETENTION_DAYS)
+
     async with get_sessionmaker()() as session:
         await session.execute(
             update(ViewSession)
             .where(ViewSession.ended_at.is_(None), ViewSession.last_seen_at < stale_before)
-            .values(ended_at=dt.datetime.now(dt.UTC))
+            .values(ended_at=now)
+        )
+        # Принятые, отозванные и давно просроченные приглашения. Действующие
+        # не трогаем никогда — по ним человек ещё может прийти.
+        await session.execute(
+            delete(Invitation).where(
+                or_(
+                    Invitation.accepted_at < invites_before,
+                    Invitation.revoked_at < invites_before,
+                    Invitation.expires_at < invites_before,
+                )
+            )
         )
         await session.commit()
 

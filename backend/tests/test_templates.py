@@ -36,8 +36,9 @@ def test_no_inline_event_handlers(name: str) -> None:
 
 
 #: Страницы, которые открываются без сессии: CSRF-токену там взяться неоткуда.
-#: Вход защищён от «login CSRF» атрибутом SameSite=Lax на cookie сессии.
-ANONYMOUS_PAGES = frozenset({"login.html", "link_password.html"})
+#: Вход защищён от «login CSRF» атрибутом SameSite=Lax на cookie сессии,
+#: а приглашение — тем, что его адрес сам по себе одноразовый секрет.
+ANONYMOUS_PAGES = frozenset({"login.html", "link_password.html", "invite_accept.html"})
 
 
 @pytest.mark.parametrize("name", [n for n in TEMPLATE_FILES if n not in ANONYMOUS_PAGES])
@@ -47,3 +48,81 @@ def test_forms_carry_csrf_token(name: str) -> None:
     forms = re.findall(r"<form[^>]*method=\"post\"[^>]*>(.*?)</form>", text, re.DOTALL)
     missing = [form for form in forms if "csrf_token" not in form]
     assert not missing, f"{name}: форм без CSRF-токена — {len(missing)}"
+
+
+# ─── Рендер страниц приглашения ──────────────────────────────────────────────
+# Компиляция ловит только синтаксис. Обращение к несуществующему атрибуту
+# (`inv.role.value` вместо `inv.role`) проявляется лишь при настоящем рендере,
+# а эти две страницы открываются реже всех остальных.
+import datetime as dt  # noqa: E402
+import types  # noqa: E402
+import uuid  # noqa: E402
+
+from app.models import Invitation, Role, User  # noqa: E402
+
+
+def _request_stub() -> types.SimpleNamespace:
+    return types.SimpleNamespace(url=types.SimpleNamespace(path="/admin/users"))
+
+
+def _invitation() -> Invitation:
+    return Invitation(
+        id=uuid.uuid4(),
+        email="new@example.com",
+        full_name="Анна",
+        role=Role.viewer,
+        token_hash="0" * 64,
+        expires_at=dt.datetime.now(dt.UTC) + dt.timedelta(hours=72),
+    )
+
+
+def test_users_page_renders_pending_invitations() -> None:
+    admin = User(id=uuid.uuid4(), email="admin@example.com", role=Role.admin)
+    html = templates.env.get_template("users.html").render(
+        request=_request_stub(),
+        user=admin,
+        users=[admin],
+        invitations=[_invitation()],
+        mail_enabled=True,
+        invite_ttl_hours=72,
+        now=dt.datetime.now(dt.UTC),
+        csrf_token="t",
+    )
+    assert "new@example.com" in html
+    assert "/admin/users/invite" in html
+    assert "Выслать заново" in html
+
+
+def test_users_page_offers_the_link_when_mail_failed() -> None:
+    """Отказ SMTP не должен оставлять администратора без ссылки."""
+    admin = User(id=uuid.uuid4(), email="admin@example.com", role=Role.admin)
+    html = templates.env.get_template("users.html").render(
+        request=_request_stub(),
+        user=admin,
+        users=[admin],
+        invitations=[],
+        mail_enabled=False,
+        invite_ttl_hours=72,
+        now=dt.datetime.now(dt.UTC),
+        csrf_token="t",
+        invite_link="https://cam.test/invite/TOKEN",
+        invite_link_email="new@example.com",
+    )
+    assert "https://cam.test/invite/TOKEN" in html
+    assert "copybutton" in html
+
+
+def test_invite_page_posts_back_to_its_own_token() -> None:
+    html = templates.env.get_template("invite_accept.html").render(
+        request=_request_stub(),
+        user=None,
+        token="TOKEN",
+        email="new@example.com",
+        full_name="Анна",
+        role="operator",
+        expires_at=dt.datetime.now(dt.UTC),
+    )
+    assert 'action="/invite/TOKEN"' in html
+    assert 'name="confirm_password"' in html
+    # Адрес задан приглашением — поле только для показа.
+    assert "readonly" in html

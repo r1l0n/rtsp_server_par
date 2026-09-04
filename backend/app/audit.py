@@ -30,6 +30,12 @@ USER_CREATED = "user.created"
 USER_UPDATED = "user.updated"
 USER_DISABLED = "user.disabled"
 
+INVITE_CREATED = "invite.created"
+INVITE_SENT = "invite.sent"
+INVITE_SEND_FAILED = "invite.send_failed"
+INVITE_REVOKED = "invite.revoked"
+INVITE_ACCEPTED = "invite.accepted"
+
 CAMERA_CREATED = "camera.created"
 CAMERA_UPDATED = "camera.updated"
 CAMERA_DELETED = "camera.deleted"

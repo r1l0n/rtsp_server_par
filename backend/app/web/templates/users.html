@@ -12,6 +12,20 @@
   </button>
 </div>
 
+{% if invite_link %}
+<div class="alert alert-ok">
+  <strong>Ссылка приглашения для {{ invite_link_email }}</strong>
+  <p>Скопируйте её сейчас — токен показывается один раз и в базе не хранится.
+     Передайте ссылку сотруднику: по ней он задаст пароль и войдёт.</p>
+  <div class="copyrow">
+    <input class="copyfield" type="text" readonly value="{{ invite_link }}">
+    <button type="button" class="btn btn-secondary copybutton" data-copy-target="prev">
+      <svg class="i" aria-hidden="true"><use href="#i-copy"></use></svg>Копировать
+    </button>
+  </div>
+</div>
+{% endif %}
+
 <section class="card">
   <div class="table-wrap">
   <table class="table">
@@ -63,25 +77,71 @@
   </div>
 </section>
 
+{# ── Приглашения, по которым ещё не пришли ──────────────────────────────── #}
+{% if invitations %}
+<section class="card">
+  <h2>Приглашения</h2>
+  <p class="muted small">Учётной записи ещё нет: она появится, когда сотрудник
+     откроет ссылку из письма и задаст пароль.</p>
+  <div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr><th>Адрес</th><th>Роль</th><th>Письмо</th><th>Действует до</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for inv in invitations %}
+      {% set expired = now and inv.expires_at <= now %}
+      <tr class="{{ 'row-off' if expired else '' }}">
+        <td>{{ inv.email }}{% if inv.full_name %}<span class="muted small"> — {{ inv.full_name }}</span>{% endif %}</td>
+        <td class="muted">{{ role_labels[inv.role.value] }}</td>
+        <td class="small">
+          {% if inv.sent_at %}<span class="tag tag-ok">отправлено</span>
+          {% else %}<span class="tag tag-off">не отправлено</span>{% endif %}
+        </td>
+        <td class="muted small nowrap">
+          {% if expired %}истекло {{ inv.expires_at.strftime('%d.%m.%Y %H:%M') }}
+          {% else %}{{ inv.expires_at.strftime('%d.%m.%Y %H:%M') }}{% endif %}
+        </td>
+        <td class="row-actions">
+          <form method="post" action="/admin/invites/{{ inv.id }}/resend" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-ghost">Выслать заново</button>
+          </form>
+          <form method="post" action="/admin/invites/{{ inv.id }}/revoke" class="inline"
+                data-confirm="Отозвать приглашение для {{ inv.email }}? Ссылка из письма перестанет работать.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-quiet">Отозвать</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+
 <div class="dialog-backdrop" id="invite" data-dialog hidden>
-  <div class="dialog dialog-form" role="dialog" aria-modal="true" aria-label="Новый пользователь">
+  <div class="dialog dialog-form" role="dialog" aria-modal="true" aria-label="Приглашение сотрудника">
     <div class="dialog-head">
-      <div class="dialog-title">Новый пользователь</div>
+      <div class="dialog-title">Пригласить сотрудника</div>
       <button type="button" class="btn btn-quiet btn-icon" data-dialog-close aria-label="Закрыть">
         <svg class="i" aria-hidden="true"><use href="#i-close"></use></svg>
       </button>
     </div>
-    <form method="post" action="/admin/users">
+    <form method="post" action="/admin/users/invite">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="field-row">
         <div class="field">
           <label for="invite-email">Электронная почта</label>
           <input id="invite-email" type="email" name="email" required maxlength="320"
                  autocomplete="off" placeholder="name@example.ru">
+          <span class="hint">На этот адрес уйдёт письмо со ссылкой</span>
         </div>
         <div class="field">
           <label for="invite-name">Имя</label>
           <input id="invite-name" type="text" name="full_name" maxlength="200">
+          <span class="hint">Необязательно — сотрудник укажет сам</span>
         </div>
         <div class="field">
           <label for="invite-role">Роль</label>
@@ -91,17 +151,18 @@
             <option value="admin">Администратор — всё</option>
           </select>
         </div>
-        <div class="field">
-          <label for="invite-password">Временный пароль</label>
-          <input id="invite-password" type="password" name="password" required minlength="12"
-                 autocomplete="new-password">
-          <span class="hint">Не короче 12 символов</span>
-        </div>
       </div>
-      <p class="hint">Пользователь сменит пароль при первом входе и настроит второй фактор.</p>
+      <p class="hint">
+        Сотрудник перейдёт по ссылке из письма и задаст пароль сам — временный
+        пароль никто не пересылает. Ссылка действует {{ invite_ttl_hours }} ч.
+        {% if not mail_enabled %}
+        <strong>Почта не настроена (SMTP_HOST в .env)</strong> — ссылку панель
+        покажет здесь, и передать её сотруднику нужно будет вручную.
+        {% endif %}
+      </p>
       <div class="dialog-actions">
         <button type="button" class="btn btn-secondary" data-dialog-close>Отмена</button>
-        <button type="submit" class="btn btn-primary">Создать</button>
+        <button type="submit" class="btn btn-primary">Отправить приглашение</button>
       </div>
     </form>
   </div>

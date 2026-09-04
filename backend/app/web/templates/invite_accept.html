@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Приглашение — {{ app_name }}{% endblock %}
+{% block content %}
+<div class="card card-narrow">
+  <h1>Добро пожаловать</h1>
+  <p class="muted small">
+    Вас пригласили в {{ app_name }} как «{{ role_labels[role] }}».
+    Задайте пароль — он понадобится при каждом входе.
+  </p>
+
+  <form method="post" action="/invite/{{ token }}">
+    <div class="field">
+      <label for="invite-email">Электронная почта</label>
+      {# Адрес задан приглашением и менять его нельзя: приглашение выписано
+         именно на него. Поле показано только для того, чтобы человек видел,
+         под какой учётной записью он окажется. #}
+      <input id="invite-email" type="email" value="{{ email }}" readonly disabled
+             autocomplete="username">
+    </div>
+    <div class="field">
+      <label for="invite-name">Как вас зовут</label>
+      <input id="invite-name" type="text" name="full_name" maxlength="200"
+             value="{{ full_name|default('') }}" autocomplete="name">
+    </div>
+    <div class="field">
+      <label for="invite-password">Пароль</label>
+      <input id="invite-password" type="password" name="password" required minlength="12"
+             autofocus autocomplete="new-password">
+      <span class="hint">Не короче 12 символов. Длина важнее спецсимволов.</span>
+    </div>
+    <div class="field">
+      <label for="invite-password2">Повторите пароль</label>
+      <input id="invite-password2" type="password" name="confirm_password" required
+             minlength="12" autocomplete="new-password">
+    </div>
+    <button type="submit" class="btn btn-primary btn-block">Задать пароль и войти</button>
+  </form>
+
+  <p class="hint">
+    Ссылка одноразовая и действует до
+    {{ expires_at.strftime('%d.%m.%Y %H:%M') }} UTC.
+  </p>
+</div>
+{% endblock %}

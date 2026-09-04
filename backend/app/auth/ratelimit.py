@@ -30,6 +30,11 @@ TOTP_BY_SESSION = Limit(limit=6, window=300)
 PUBLIC_VIEW_BY_IP = Limit(limit=120, window=60)
 #: Ввод пароля к защищённой ссылке.
 LINK_PASSWORD_BY_IP = Limit(limit=10, window=600)
+#: Открытие ссылки-приглашения: защита от перебора токенов.
+INVITE_BY_IP = Limit(limit=30, window=600)
+#: Отправка приглашений одним администратором — чтобы панель нельзя было
+#: превратить в рассыльщик спама с нашего домена (и сжечь репутацию SMTP).
+INVITE_SEND_BY_ACTOR = Limit(limit=30, window=3600)
 
 
 async def hit(bucket: str, key: str, limit: Limit) -> Decision:

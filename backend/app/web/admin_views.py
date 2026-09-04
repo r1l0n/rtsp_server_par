@@ -1,20 +1,24 @@
-"""Администрирование: пользователи и журнал аудита."""
+"""Администрирование: пользователи, приглашения и журнал аудита."""
 
 from __future__ import annotations
 
+import datetime as dt
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import audit as audit_log
-from ..auth import sessions
+from .. import invites
+from ..auth import ratelimit, sessions
 from ..auth.deps import CsrfProtected, DbSession, Forbidden, RequireAdmin
-from ..auth.passwords import WeakPasswordError, hash_password, validate_password_policy
+from ..config import get_settings
+from ..mail import MailError, MailNotConfigured
 from ..middleware import client_ip
-from ..models import AuditLog, RecoveryCode, Role, User
+from ..models import AuditLog, Invitation, RecoveryCode, Role, User
 from .templating import notice, redirect, render
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -22,62 +26,154 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 AUDIT_PAGE_SIZE = 100
 
 
-@router.get("/users", response_class=HTMLResponse)
-async def users_list(request: Request, db: DbSession, admin: RequireAdmin) -> HTMLResponse:
-    users = list(await db.scalars(select(User).order_by(User.email)))
+async def _users_page(
+    request: Request, db: AsyncSession, admin: User, *, status_code: int = 200,
+    **extra: object,
+) -> HTMLResponse:
+    """Страница «Пользователи»: список учёток и неиспользованные приглашения."""
     return render(
         request,
         "users.html",
+        status_code=status_code,
         user=admin,
-        users=users,
-        notice=notice(request.query_params.get("notice")),
+        users=list(await db.scalars(select(User).order_by(User.email))),
+        invitations=await invites.pending_for_list(db),
+        mail_enabled=get_settings().mail_enabled,
+        invite_ttl_hours=get_settings().invite_ttl_hours,
+        now=dt.datetime.now(dt.UTC),
+        **extra,
     )
 
 
-@router.post("/users")
-async def user_create(
+@router.get("/users", response_class=HTMLResponse)
+async def users_list(request: Request, db: DbSession, admin: RequireAdmin) -> HTMLResponse:
+    return await _users_page(
+        request, db, admin, notice=notice(request.query_params.get("notice"))
+    )
+
+
+# ─── Приглашения ─────────────────────────────────────────────────────────────
+async def _deliver(
+    request: Request,
+    db: AsyncSession,
+    admin: User,
+    invitation: Invitation,
+    token: str,
+    *,
+    action: str,
+) -> Response:
+    """Пытается отправить письмо и отвечает страницей.
+
+    Отказ SMTP не отменяет приглашение: ссылка уже выпущена и работает.
+    Поэтому вместо ошибки администратор получает эту ссылку на экран — чтобы
+    передать её сотруднику любым другим способом. Иначе внедрение упиралось бы
+    в почтовый сервер, которого может не быть вовсе.
+    """
+    ip = client_ip(request)
+    await audit_log.record(
+        db, action, actor_id=admin.id, target_type="invite", target_id=str(invitation.id),
+        ip=ip, meta={"email": invitation.email, "role": invitation.role.value},
+    )
+
+    try:
+        await invites.send_email(invitation, token, admin)
+    except MailError as exc:
+        await audit_log.record(
+            db, audit_log.INVITE_SEND_FAILED, actor_id=admin.id, target_type="invite",
+            target_id=str(invitation.id), ip=ip,
+            meta={"email": invitation.email, "error": type(exc).__name__},
+        )
+        await db.commit()
+        hint = (
+            "Письмо не отправлено, но приглашение выпущено — передайте ссылку сотруднику."
+            if isinstance(exc, MailNotConfigured)
+            else f"Письмо не отправлено: {exc} Приглашение выпущено — передайте ссылку сами."
+        )
+        return await _users_page(
+            request, db, admin,
+            invite_link=invites.invite_url(token),
+            invite_link_email=invitation.email,
+            error=hint,
+        )
+
+    await audit_log.record(
+        db, audit_log.INVITE_SENT, actor_id=admin.id, target_type="invite",
+        target_id=str(invitation.id), ip=ip, meta={"email": invitation.email},
+    )
+    await db.commit()
+    return redirect("/admin/users?notice=invite_sent")
+
+
+@router.post("/users/invite")
+async def user_invite(
     request: Request,
     db: DbSession,
     admin: RequireAdmin,
     _: CsrfProtected,
     email: Annotated[str, Form()],
-    password: Annotated[str, Form()],
     role: Annotated[str, Form()] = Role.operator.value,
     full_name: Annotated[str, Form()] = "",
 ) -> Response:
-    email = email.strip().lower()
-
-    async def fail(message: str) -> HTMLResponse:
-        users = list(await db.scalars(select(User).order_by(User.email)))
-        return render(
-            request, "users.html", status_code=400, user=admin, users=users, error=message,
+    quota = await ratelimit.hit("invite_send", str(admin.id), ratelimit.INVITE_SEND_BY_ACTOR)
+    if not quota.allowed:
+        return await _users_page(
+            request, db, admin, status_code=429,
+            error="Слишком много приглашений за час. Повторите позже.",
         )
 
-    if "@" not in email or len(email) > 320:
-        return await fail("Укажите корректный адрес электронной почты.")
-    if await db.scalar(select(User).where(User.email == email)) is not None:
-        return await fail("Пользователь с таким адресом уже существует.")
     try:
-        validate_password_policy(password, email=email)
-    except WeakPasswordError as exc:
-        return await fail(str(exc))
+        chosen_role = Role(role)
+    except ValueError:
+        return await _users_page(request, db, admin, status_code=400, error="Неизвестная роль.")
 
-    user = User(
-        email=email,
-        full_name=full_name.strip()[:200],
-        password_hash=hash_password(password),
-        role=Role(role),
-        # Пароль задал администратор — при первом входе пользователь его меняет.
-        must_change_password=True,
+    try:
+        invitation, token = await invites.create(
+            db, email=email, full_name=full_name, role=chosen_role, invited_by=admin
+        )
+    except invites.InviteError as exc:
+        return await _users_page(request, db, admin, status_code=400, error=str(exc))
+
+    return await _deliver(
+        request, db, admin, invitation, token, action=audit_log.INVITE_CREATED
     )
-    db.add(user)
-    await db.flush()
+
+
+@router.post("/invites/{invite_id}/resend")
+async def invite_resend(
+    request: Request, db: DbSession, admin: RequireAdmin, _: CsrfProtected, invite_id: uuid.UUID
+) -> Response:
+    invitation = await db.get(Invitation, invite_id)
+    if invitation is None or not invitation.is_pending:
+        raise Forbidden("Приглашение не найдено или уже использовано")
+
+    quota = await ratelimit.hit("invite_send", str(admin.id), ratelimit.INVITE_SEND_BY_ACTOR)
+    if not quota.allowed:
+        return await _users_page(
+            request, db, admin, status_code=429,
+            error="Слишком много приглашений за час. Повторите позже.",
+        )
+
+    token = await invites.reissue(db, invitation)
+    return await _deliver(
+        request, db, admin, invitation, token, action=audit_log.INVITE_CREATED
+    )
+
+
+@router.post("/invites/{invite_id}/revoke")
+async def invite_revoke(
+    request: Request, db: DbSession, admin: RequireAdmin, _: CsrfProtected, invite_id: uuid.UUID
+) -> RedirectResponse:
+    invitation = await db.get(Invitation, invite_id)
+    if invitation is None or not invitation.is_pending:
+        raise Forbidden("Приглашение не найдено или уже использовано")
+
+    invitation.revoked_at = dt.datetime.now(dt.UTC)
     await audit_log.record(
-        db, audit_log.USER_CREATED, actor_id=admin.id, target_type="user",
-        target_id=str(user.id), ip=client_ip(request), meta={"email": email, "role": role},
+        db, audit_log.INVITE_REVOKED, actor_id=admin.id, target_type="invite",
+        target_id=str(invitation.id), ip=client_ip(request), meta={"email": invitation.email},
     )
     await db.commit()
-    return redirect("/admin/users?notice=user_created")
+    return redirect("/admin/users?notice=invite_revoked")
 
 
 @router.post("/users/{user_id}/toggle")

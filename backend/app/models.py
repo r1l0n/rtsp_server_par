@@ -94,6 +94,47 @@ class User(Base):
     )
 
 
+class Invitation(Base):
+    """Приглашение сотрудника: письмо со ссылкой, по которой он задаёт пароль.
+
+    Учётная запись создаётся только в момент принятия приглашения — до тех пор
+    в `users` нет строки с пустым или заведомо известным паролем, а значит
+    и войти под приглашённым адресом нельзя.
+    """
+
+    __tablename__ = "invitations"
+
+    id: Mapped[uuid.UUID] = _pk()
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    full_name: Mapped[str] = mapped_column(String(200), default="")
+    role: Mapped[Role] = mapped_column(Enum(Role, name="user_role"), default=Role.operator)
+
+    #: SHA-256 от токена из письма. Сам токен не хранится — как и у ссылок.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+    expires_at: Mapped[dt.datetime] = mapped_column(TS)
+    accepted_at: Mapped[dt.datetime | None] = mapped_column(TS, default=None)
+    revoked_at: Mapped[dt.datetime | None] = mapped_column(TS, default=None)
+    #: Когда письмо реально ушло. NULL — почта не настроена или SMTP отказал,
+    #: ссылку администратор передал сам.
+    sent_at: Mapped[dt.datetime | None] = mapped_column(TS, default=None)
+
+    invited_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    accepted_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[dt.datetime] = mapped_column(TS, server_default=func.now())
+
+    @property
+    def is_pending(self) -> bool:
+        return self.accepted_at is None and self.revoked_at is None
+
+    def is_expired(self, now: dt.datetime | None = None) -> bool:
+        return self.expires_at <= (now or dt.datetime.now(dt.UTC))
+
+
 class RecoveryCode(Base):
     """Одноразовый код восстановления на случай потери TOTP-устройства."""
 

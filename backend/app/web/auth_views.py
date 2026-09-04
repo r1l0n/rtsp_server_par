@@ -20,7 +20,13 @@ from ..crypto import get_cipher
 from ..logging_setup import get_logger
 from ..middleware import client_ip
 from ..models import RecoveryCode, Role, User
-from .templating import clear_session_cookie, redirect, render, set_session_cookie
+from .templating import (
+    clear_session_cookie,
+    notice,
+    redirect,
+    render,
+    set_session_cookie,
+)
 
 log = get_logger("auth")
 router = APIRouter(tags=["auth"])
@@ -58,7 +64,12 @@ def totp_required_for(role: Role) -> bool:
 async def login_form(request: Request, session: SessionDep, next: str = "/") -> HTMLResponse:
     if session is not None and not session.pending_2fa:
         return redirect(safe_next(next))  # type: ignore[return-value]
-    return render(request, "login.html", next=safe_next(next))
+    return render(
+        request,
+        "login.html",
+        next=safe_next(next),
+        notice=notice(request.query_params.get("notice")),
+    )
 
 
 @router.post("/login")

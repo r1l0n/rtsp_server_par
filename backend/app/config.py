@@ -60,6 +60,28 @@ class Settings(BaseSettings):
     # в каждом запросе за HLS-сегментом.
     view_cookie_ttl_minutes: int = 60
 
+    # --- Приглашения сотрудников ---------------------------------------------
+    #: Сколько живёт ссылка из письма-приглашения.
+    invite_ttl_hours: int = 72
+
+    # --- Почта (SMTP) --------------------------------------------------------
+    # Пустой SMTP_HOST = почта не настроена. Это не ошибка: приглашение всё
+    # равно создаётся, а ссылку панель показывает администратору, чтобы он
+    # передал её сотруднику сам.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    #: starttls — обычный submission-порт 587; ssl — implicit TLS на 465;
+    #: none — без шифрования (только для локального релея в той же сети).
+    smtp_security: Literal["starttls", "ssl", "none"] = "starttls"
+    smtp_username: str = ""
+    #: Пароль приходит либо файлом (docker secret), либо переменной окружения.
+    smtp_password_file: Path | None = None
+    smtp_password: str | None = None
+    #: Отправитель письма. Пусто — noreply@<DOMAIN>.
+    mail_from: str = ""
+    mail_from_name: str = "RTSP Gateway"
+    smtp_timeout_seconds: int = 15
+
     # --- Безопасность добавления камер (SSRF) --------------------------------
     allow_private_camera_hosts: bool = False
     camera_host_allowlist: str = ""
@@ -139,6 +161,28 @@ class Settings(BaseSettings):
     @property
     def base_url(self) -> str:
         return f"https://{self.domain}"
+
+    # --- Почта ---------------------------------------------------------------
+    @property
+    def mail_enabled(self) -> bool:
+        return bool(self.smtp_host.strip())
+
+    @property
+    def mail_sender(self) -> str:
+        """Адрес в поле From. По умолчанию — noreply на своём домене."""
+        return self.mail_from.strip() or f"noreply@{self.domain}"
+
+    @functools.cached_property
+    def smtp_secret(self) -> str:
+        """Пароль SMTP. Файл имеет приоритет над переменной окружения."""
+        if self.smtp_password_file is not None:
+            try:
+                return self.smtp_password_file.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise ConfigError(
+                    f"не удалось прочитать SMTP_PASSWORD_FILE={self.smtp_password_file}: {exc}"
+                ) from exc
+        return (self.smtp_password or "").strip()
 
 
 @functools.lru_cache(maxsize=1)

@@ -20,7 +20,14 @@ from .logging_setup import configure_logging, get_logger
 from .media.mtx_client import close_mtx, get_mtx
 from .middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from .redis_client import close_redis, get_redis
-from .web import admin_views, auth_views, panel_views, profile_views, public_views
+from .web import (
+    admin_views,
+    auth_views,
+    invite_views,
+    panel_views,
+    profile_views,
+    public_views,
+)
 from .web.templating import STATIC_DIR, redirect, render
 
 log = get_logger("app")
@@ -147,6 +154,7 @@ def create_app() -> FastAPI:
     app.include_router(authz.router)
     app.include_router(auth_views.router)
     app.include_router(public_views.router)
+    app.include_router(invite_views.router)
     app.include_router(profile_views.router)
     app.include_router(admin_views.router)
     app.include_router(panel_views.router)
