@@ -1,69 +1,58 @@
 {% extends "base.html" %}
 {% block title %}Пользователи — {{ app_name }}{% endblock %}
 {% block content %}
-<h1>Пользователи</h1>
+
+<div class="page-head">
+  <div>
+    <h1>Пользователи</h1>
+    <div class="subtitle">Кто входит в шлюз и что ему разрешено</div>
+  </div>
+  <button type="button" class="btn btn-primary" data-dialog-open="invite">
+    <svg class="i" aria-hidden="true"><use href="#i-user-plus"></use></svg>Пригласить
+  </button>
+</div>
 
 <section class="card">
-  <h2>Создать пользователя</h2>
-  <form method="post" action="/admin/users" class="row-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>Электронная почта
-      <input type="email" name="email" required maxlength="320" autocomplete="off">
-    </label>
-    <label>Имя
-      <input type="text" name="full_name" maxlength="200">
-    </label>
-    <label>Роль
-      <select name="role">
-        <option value="operator" selected>Оператор — свои камеры и ссылки</option>
-        <option value="admin">Администратор — всё</option>
-        <option value="viewer">Наблюдатель — только просмотр</option>
-      </select>
-    </label>
-    <label>Временный пароль
-      <input type="password" name="password" required minlength="12" autocomplete="new-password">
-      <span class="hint">Пользователь сменит его при первом входе.</span>
-    </label>
-    <button type="submit" class="primary">Создать</button>
-  </form>
-</section>
-
-<section class="card">
+  <div class="table-wrap">
   <table class="table">
-    <thead><tr><th>Почта</th><th>Имя</th><th>Роль</th><th>2FA</th><th>Вход</th><th></th></tr></thead>
+    <thead>
+      <tr><th>Пользователь</th><th>Имя</th><th>Роль</th><th>2FA</th><th>Последний вход</th><th></th></tr>
+    </thead>
     <tbody>
       {% for u in users %}
       <tr class="{{ '' if u.is_active else 'row-off' }}">
         <td>{{ u.email }}</td>
-        <td>{{ u.full_name or '—' }}</td>
+        <td class="muted">{{ u.full_name or '—' }}</td>
         <td>
-          <form method="post" action="/admin/users/{{ u.id }}/role" class="inline">
+          <form method="post" action="/admin/users/{{ u.id }}/role" class="actions">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <select name="role" {% if u.id == user.id %}disabled{% endif %}>
+            <select name="role" aria-label="Роль" {% if u.id == user.id %}disabled{% endif %}>
               {% for r in ['admin', 'operator', 'viewer'] %}
-                <option value="{{ r }}" {% if u.role.value == r %}selected{% endif %}>{{ r }}</option>
+                <option value="{{ r }}" {% if u.role.value == r %}selected{% endif %}>{{ role_labels[r] }}</option>
               {% endfor %}
             </select>
-            {% if u.id != user.id %}<button type="submit">Сменить</button>{% endif %}
+            {% if u.id != user.id %}<button type="submit" class="btn btn-ghost">Сменить</button>{% endif %}
           </form>
         </td>
-        <td>{% if u.totp_enabled %}<span class="badge badge-on">вкл</span>
-            {% else %}<span class="badge badge-off">выкл</span>{% endif %}</td>
-        <td class="muted small">
+        <td>
+          {% if u.totp_enabled %}<span class="tag tag-ok">включена</span>
+          {% else %}<span class="tag tag-off">выключена</span>{% endif %}
+        </td>
+        <td class="muted small nowrap">
           {{ u.last_login_at.strftime('%d.%m.%Y %H:%M') if u.last_login_at else 'ни разу' }}
         </td>
         <td class="row-actions">
           {% if u.id != user.id %}
           <form method="post" action="/admin/users/{{ u.id }}/toggle" class="inline">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit">{{ 'Отключить' if u.is_active else 'Включить' }}</button>
+            <button type="submit" class="btn btn-ghost">{{ 'Отключить' if u.is_active else 'Включить' }}</button>
           </form>
           {% endif %}
           {% if u.totp_enabled %}
           <form method="post" action="/admin/users/{{ u.id }}/reset-2fa" class="inline"
                 data-confirm="Сбросить второй фактор у {{ u.email }}? До повторной настройки вход будет защищён только паролем.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="danger">Сбросить 2FA</button>
+            <button type="submit" class="btn btn-quiet">Сбросить 2FA</button>
           </form>
           {% endif %}
         </td>
@@ -71,5 +60,50 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </section>
+
+<div class="dialog-backdrop" id="invite" data-dialog hidden>
+  <div class="dialog dialog-form" role="dialog" aria-modal="true" aria-label="Новый пользователь">
+    <div class="dialog-head">
+      <div class="dialog-title">Новый пользователь</div>
+      <button type="button" class="btn btn-quiet btn-icon" data-dialog-close aria-label="Закрыть">
+        <svg class="i" aria-hidden="true"><use href="#i-close"></use></svg>
+      </button>
+    </div>
+    <form method="post" action="/admin/users">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field-row">
+        <div class="field">
+          <label for="invite-email">Электронная почта</label>
+          <input id="invite-email" type="email" name="email" required maxlength="320"
+                 autocomplete="off" placeholder="name@example.ru">
+        </div>
+        <div class="field">
+          <label for="invite-name">Имя</label>
+          <input id="invite-name" type="text" name="full_name" maxlength="200">
+        </div>
+        <div class="field">
+          <label for="invite-role">Роль</label>
+          <select id="invite-role" name="role">
+            <option value="operator" selected>Оператор — свои камеры и ссылки</option>
+            <option value="viewer">Наблюдатель — только просмотр</option>
+            <option value="admin">Администратор — всё</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="invite-password">Временный пароль</label>
+          <input id="invite-password" type="password" name="password" required minlength="12"
+                 autocomplete="new-password">
+          <span class="hint">Не короче 12 символов</span>
+        </div>
+      </div>
+      <p class="hint">Пользователь сменит пароль при первом входе и настроит второй фактор.</p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-secondary" data-dialog-close>Отмена</button>
+        <button type="submit" class="btn btn-primary">Создать</button>
+      </div>
+    </form>
+  </div>
+</div>
 {% endblock %}

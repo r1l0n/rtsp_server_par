@@ -1,0 +1,61 @@
+{# Разметка плеера. Один макрос на все три места, где он появляется: карточка
+   камеры в панели, модальное окно списка камер и страница публичной ссылки.
+   Раньше эта разметка была скопирована в player.html и embed.html, и любое
+   изменение приходилось вносить дважды — а расходились они молча.
+
+   ticket  — адрес, по которому панель получает временный доступ оператора
+             (POST). Взаимоисключающ с парой whep/hls: их знает только страница
+             публичной ссылки, где доступ уже выдан cookie.
+   poster  — снапшот на заставке. Пока заставку не нажали, поток не поднимается:
+             камера с on_demand иначе подключалась бы на каждое открытие. #}
+
+{% macro player(key, ticket='', whep='', hls='', audio=false, title='',
+                poster='', autostart=false, inline=true, show_stop=true,
+                show_fullscreen=true) %}
+<div class="player{{ ' player-inline' if inline else '' }}"
+     data-key="{{ key }}"
+     {% if ticket %}data-ticket="{{ ticket }}"{% endif %}
+     {% if whep %}data-whep="{{ whep }}"{% endif %}
+     {% if hls %}data-hls="{{ hls }}"{% endif %}
+     data-audio="{{ '1' if audio else '0' }}"
+     {% if autostart %}data-autostart="1"{% endif %}>
+  <video playsinline muted></video>
+
+  {% if not autostart %}
+  <button type="button" class="player-poster">
+    {# data-fallback-hide: снапшота может ещё не быть, и значок битой картинки
+       на заставке выглядит как поломка страницы. #}
+    {% if poster %}<img src="{{ poster }}" alt="" loading="lazy" data-fallback-hide>{% endif %}
+    <span class="player-poster-label">
+      <svg class="i" aria-hidden="true"><use href="#i-play"></use></svg>Смотреть
+    </span>
+  </button>
+  {% endif %}
+
+  <div class="player-status"{% if not autostart %} hidden{% endif %}>Подключение…</div>
+
+  <div class="player-bar">
+    {% if title %}<span class="player-title">{{ title }}</span>{% endif %}
+    <span class="player-transport"></span>
+    <span class="player-modes" role="group" aria-label="Транспорт">
+      <button type="button" class="player-button player-mode" data-mode="auto"
+              title="Сначала WebRTC, при неудаче HLS">Авто</button>
+      <button type="button" class="player-button player-mode" data-mode="webrtc"
+              title="Задержка около секунды, нужен UDP">WebRTC</button>
+      <button type="button" class="player-button player-mode" data-mode="hls"
+              title="Идёт по 443/TCP, проходит везде">HLS</button>
+    </span>
+    <button type="button" class="player-button player-sound" hidden>Включить звук</button>
+    {% if show_stop %}
+    <button type="button" class="player-button player-stop" hidden title="Остановить поток">
+      <svg class="i" aria-hidden="true"><use href="#i-stop"></use></svg>Стоп
+    </button>
+    {% endif %}
+    {% if show_fullscreen %}
+    <button type="button" class="player-button player-fullscreen" title="На весь экран">
+      <svg class="i" aria-hidden="true"><use href="#i-expand"></use></svg>
+    </button>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}

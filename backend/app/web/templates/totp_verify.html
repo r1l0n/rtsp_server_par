@@ -3,16 +3,17 @@
 {% block content %}
 <div class="card card-narrow">
   <h1>Код подтверждения</h1>
-  <p class="muted">Введите шестизначный код из приложения-аутентификатора либо один
+  <p class="muted small">Введите шестизначный код из приложения-аутентификатора либо один
      из кодов восстановления.</p>
   <form method="post" action="/login/2fa">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="next" value="{{ next }}">
-    <label>Код
-      <input type="text" name="code" required autofocus inputmode="numeric"
+    <div class="field">
+      <label for="otp-code">Код</label>
+      <input id="otp-code" type="text" name="code" required autofocus inputmode="numeric"
              autocomplete="one-time-code" maxlength="16" pattern="[0-9a-zA-Z\-]{6,16}">
-    </label>
-    <button type="submit" class="primary">Подтвердить</button>
+    </div>
+    <button type="submit" class="btn btn-primary btn-block">Подтвердить</button>
   </form>
 </div>
 {% endblock %}

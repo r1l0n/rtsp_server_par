@@ -1,26 +1,38 @@
 {% extends "base.html" %}
 {% block title %}Профиль — {{ app_name }}{% endblock %}
+{% block container_class %}container-narrow{% endblock %}
 {% block content %}
-<h1>Профиль</h1>
+
+<div class="page-head">
+  <div>
+    <h1>Профиль</h1>
+    <div class="subtitle">{{ user.email }} · {{ role_labels[user.role.value] }}</div>
+  </div>
+</div>
 
 <div class="columns">
   <section class="card">
-    <h2>Двухфакторная аутентификация</h2>
+    <div class="page-head">
+      <h2>Двухфакторная аутентификация</h2>
+      {% if user.totp_enabled %}<span class="tag tag-outline">включена</span>
+      {% else %}<span class="tag tag-off">выключена</span>{% endif %}
+    </div>
+
     {% if user.totp_enabled %}
-      <p><span class="badge badge-on">включена</span></p>
-      <p class="muted"><a href="/profile/2fa/codes">Коды восстановления</a></p>
       {% if totp_mandatory %}
-        <p class="muted">Политика компании требует второй фактор для вашей роли.</p>
-      {% else %}
-        <p><a class="button" href="/profile/2fa">Управление</a></p>
+        <p class="muted small">Политика компании требует второй фактор для вашей роли —
+           отключить его может только другой администратор.</p>
       {% endif %}
+      <div class="actions">
+        <a class="btn btn-secondary" href="/profile/2fa/codes">Коды восстановления</a>
+        {% if not totp_mandatory %}<a class="btn btn-quiet" href="/profile/2fa">Управление</a>{% endif %}
+      </div>
     {% else %}
-      <p><span class="badge badge-off">выключена</span></p>
       {% if totp_mandatory %}
         <div class="alert alert-error">Политика требует второй фактор для вашей роли.
           Настройте его сейчас.</div>
       {% endif %}
-      <p><a class="button primary" href="/profile/2fa">Настроить</a></p>
+      <div class="actions"><a class="btn btn-primary" href="/profile/2fa">Настроить</a></div>
     {% endif %}
   </section>
 
@@ -29,42 +41,51 @@
     {% if password_error %}<div class="alert alert-error">{{ password_error }}</div>{% endif %}
     <form method="post" action="/profile/password">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Текущий пароль
-        <input type="password" name="current_password" required autocomplete="current-password">
-      </label>
-      <label>Новый пароль
-        <input type="password" name="new_password" required autocomplete="new-password"
-               minlength="12">
-        <span class="hint">Не короче 12 символов.</span>
-      </label>
-      <label>Повторите новый пароль
-        <input type="password" name="confirm_password" required autocomplete="new-password">
-      </label>
-      <button type="submit" class="primary">Сменить пароль</button>
-      <p class="hint">После смены пароля все остальные сессии будут завершены.</p>
+      <div class="field">
+        <label for="pw-current">Текущий пароль</label>
+        <input id="pw-current" type="password" name="current_password" required
+               autocomplete="current-password">
+      </div>
+      <div class="field">
+        <label for="pw-new">Новый пароль</label>
+        <input id="pw-new" type="password" name="new_password" required minlength="12"
+               autocomplete="new-password">
+        <span class="hint">Не короче 12 символов</span>
+      </div>
+      <div class="field">
+        <label for="pw-repeat">Повторите новый пароль</label>
+        <input id="pw-repeat" type="password" name="confirm_password" required
+               autocomplete="new-password">
+      </div>
+      <button type="submit" class="btn btn-primary">Сменить пароль</button>
+      <span class="hint">После смены пароля все остальные сессии будут завершены.</span>
     </form>
   </section>
 </div>
 
 <section class="card">
-  <h2>Активные сессии</h2>
+  <div class="page-head">
+    <h2>Активные сессии</h2>
+    <form method="post" action="/profile/sessions/revoke" class="inline"
+          data-confirm="Завершить все сессии, кроме текущей?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn-quiet">Завершить остальные</button>
+    </form>
+  </div>
+  <div class="table-wrap">
   <table class="table">
-    <thead><tr><th>Начата</th><th>IP</th><th>Браузер</th><th></th></tr></thead>
+    <thead><tr><th>Начата</th><th>IP</th><th>Устройство</th><th></th></tr></thead>
     <tbody>
       {% for s in sessions %}
       <tr>
-        <td>{{ s.created_at | timestamp }}</td>
-        <td><code>{{ s.ip }}</code></td>
-        <td class="ellipsis">{{ s.user_agent }}</td>
-        <td>{% if s.sid == current_sid %}<span class="badge badge-on">текущая</span>{% endif %}</td>
+        <td class="muted small nowrap">{{ s.created_at | timestamp }}</td>
+        <td class="muted small">{{ s.ip }}</td>
+        <td class="small ellipsis">{{ s.user_agent }}</td>
+        <td class="nowrap">{% if s.sid == current_sid %}<span class="tag tag-outline">текущая</span>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
-  <form method="post" action="/profile/sessions/revoke"
-        data-confirm="Завершить все сессии, кроме текущей?">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit">Завершить остальные сессии</button>
-  </form>
+  </div>
 </section>
 {% endblock %}

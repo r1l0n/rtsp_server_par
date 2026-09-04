@@ -9,7 +9,13 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -457,16 +463,70 @@ async def camera_set_profile(
 OPERATOR_VIEW_TTL_SECONDS = 15 * 60
 
 
+def _set_view_cookie(response: Response, viewer_id: str) -> None:
+    """Cookie зрителя. Её и только её видит forward_auth на медиа-запросах."""
+    response.set_cookie(
+        VIEW_COOKIE,
+        viewer_id,
+        max_age=OPERATOR_VIEW_TTL_SECONDS,
+        httponly=True,
+        secure=get_settings().session_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
+@router.post("/cameras/{camera_id}/live/ticket")
+async def camera_live_ticket(
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    _: CsrfProtected,
+    camera_id: uuid.UUID,
+) -> Response:
+    """Выдаёт оператору доступ к своей камере и возвращает адреса потока.
+
+    Нужен встроенному в панель плееру: карточка камеры и список показывают
+    видео на месте, без ухода на отдельную страницу. Права выдаются ровно те
+    же, что выдавала она, — запись в Redis на четверть часа и cookie зрителя.
+
+    Отдельный маршрут, а не выдача прав при рендере страницы: страница камеры
+    может висеть открытой часами, а WebRTC после установки соединения идёт
+    мимо Caddy и сам доступ не продлевает. Плеер дёргает этот маршрут в начале
+    просмотра и раз в девять минут, пока смотрят, — доступ живёт ровно столько,
+    сколько на камеру действительно смотрят.
+    """
+    camera = await _get_camera(db, camera_id, user)
+    if not camera.is_enabled:
+        return JSONResponse(
+            {"error": "Камера выключена — поток остановлен."}, status_code=409
+        )
+
+    viewer_id = request.cookies.get(VIEW_COOKIE) or new_viewer_id()
+    await grant_operator(viewer_id, camera.mtx_path, OPERATOR_VIEW_TTL_SECONDS)
+
+    response = JSONResponse(
+        {
+            "whep": f"/whep/{camera.mtx_path}/whep",
+            "hls": f"/hls/{camera.mtx_path}/index.m3u8",
+            "audio": camera.audio_enabled,
+            "ttl": OPERATOR_VIEW_TTL_SECONDS,
+        }
+    )
+    _set_view_cookie(response, viewer_id)
+    return response
+
+
 @router.get("/cameras/{camera_id}/live", response_class=HTMLResponse)
 async def camera_live(
     request: Request, db: DbSession, user: CurrentUser, camera_id: uuid.UUID
 ) -> HTMLResponse:
-    """Плеер для оператора: та же цепочка Caddy → forward_auth → MediaMTX,
-    что и у зрителя, но без публичной ссылки и токена.
+    """Плеер оператора на отдельной странице.
 
-    Нужен, чтобы разделить два совершенно разных отказа. Если здесь картинка
-    есть, а по публичной ссылке нет — сломана выдача доступа по ссылке.
-    Если нет и здесь — дело в медиа-тракте, и это видно в отчёте диагностики.
+    Основной просмотр теперь встроен в панель (см. camera_live_ticket), а эта
+    страница осталась как запасной путь: полноэкранный кадр на второй монитор
+    и способ проверить, что дело не в разметке панели. Цепочка та же —
+    Caddy → forward_auth → MediaMTX, без публичной ссылки и токена.
     """
     camera = await _get_camera(db, camera_id, user)
 
@@ -482,15 +542,7 @@ async def camera_live(
         hls_url=f"/hls/{camera.mtx_path}/index.m3u8",
         audio_enabled=camera.audio_enabled,
     )
-    response.set_cookie(
-        VIEW_COOKIE,
-        viewer_id,
-        max_age=OPERATOR_VIEW_TTL_SECONDS,
-        httponly=True,
-        secure=get_settings().session_cookie_secure,
-        samesite="lax",
-        path="/",
-    )
+    _set_view_cookie(response, viewer_id)
     return response
 
 

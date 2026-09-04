@@ -1,40 +1,121 @@
 {% extends "base.html" %}
+{% import "_player.html" as player_macro %}
 {% block title %}Камеры — {{ app_name }}{% endblock %}
 {% block content %}
+
+{# Имя переменной намеренно не начинается с «on»: тест шаблонов ищет
+   инлайновые обработчики регуляркой \son[a-z]+= и ловит на неё любое
+   присваивание такому имени. #}
+{% set live = cameras | selectattr('status.value', 'equalto', 'online') | list | length %}
+{% set broken = cameras | rejectattr('status.value', 'in', ['online', 'idle']) | list | length %}
+
 <div class="page-head">
-  <h1>Камеры</h1>
-  <a class="button primary" href="/cameras/new">Добавить камеру</a>
+  <div>
+    <h1>Камеры</h1>
+    <div class="subtitle">
+      {{ cameras | length }} всего · {{ live }} в эфире
+      {%- if broken %} · <span class="state-error">{{ broken }} требуют внимания</span>{% endif %}
+    </div>
+  </div>
+  <div class="actions">
+    {% if cameras %}
+    <input type="search" class="filter-input" data-filter-target=".grid .tile"
+           placeholder="Название, адрес, описание…" aria-label="Фильтр камер">
+    {% endif %}
+    <a class="btn btn-primary" href="/cameras/new">
+      <svg class="i" aria-hidden="true"><use href="#i-plus"></use></svg>Добавить камеру
+    </a>
+  </div>
 </div>
 
 {% if not cameras %}
   <div class="empty">
     <p>Пока ни одной камеры. Добавьте первую — понадобится RTSP-ссылка вида
        <code>rtsp://логин:пароль@адрес:порт/поток</code>.</p>
+    <p><a class="btn btn-primary" href="/cameras/new">
+      <svg class="i" aria-hidden="true"><use href="#i-plus"></use></svg>Добавить камеру</a></p>
   </div>
 {% else %}
+
 <div class="grid">
   {% for camera in cameras %}
-  <a class="tile" href="/cameras/{{ camera.id }}">
-    <div class="tile-preview">
-      <img src="/cameras/{{ camera.id }}/snapshot.jpg" alt="" loading="lazy">
-    </div>
-    <div class="tile-body">
-      <div class="tile-title">{{ camera.name }}</div>
-      <div class="tile-meta">
-        <span class="status status-{{ camera.status.value }}">{{ camera.status.value }}</span>
-        <span class="muted">{{ link_counts.get(camera.id, 0) }} ссылок</span>
-      </div>
-      {% if camera.probe and camera.probe.video_codec %}
-        <div class="muted small">
-          {{ camera.probe.video_codec|upper }}
-          {%- if camera.probe.width %} · {{ camera.probe.width }}×{{ camera.probe.height }}{% endif %}
-          {%- if camera.probe.fps %} · {{ camera.probe.fps }} fps{% endif %}
-        </div>
+  <article class="tile{{ ' is-off' if not camera.is_enabled else '' }}"
+           data-search="{{ camera.name }} {{ camera.description }} {{ camera.host }}:{{ camera.port }}">
+    <div class="shot">
+      <div class="shot-empty">кадра ещё нет</div>
+      <img src="/cameras/{{ camera.id }}/snapshot.jpg" alt="" loading="lazy" data-fallback-hide>
+      <span class="shot-badge state-{{ camera.status.value }}">
+        <span class="dot"></span>{{ camera_status_labels[camera.status.value] }}
+      </span>
+      {% if camera.probe and camera.probe.width %}
+        <span class="shot-note">{{ camera.probe.width }}×{{ camera.probe.height }}</span>
       {% endif %}
-      {% if not camera.is_enabled %}<div class="badge">выключена</div>{% endif %}
+      {% if camera.is_enabled %}
+      <button type="button" class="shot-play" data-watch="watch-{{ camera.id }}">
+        <svg class="i" aria-hidden="true"><use href="#i-play"></use></svg>Смотреть
+      </button>
+      {% endif %}
     </div>
-  </a>
+
+    <div class="tile-body">
+      <a class="tile-name" href="/cameras/{{ camera.id }}">
+        <div class="card-title">{{ camera.name }}</div>
+      </a>
+      <div class="muted small">
+        {% if camera.probe and camera.probe.video_codec %}
+          {{ camera.probe.video_codec|upper }}
+          {%- if camera.probe.fps %} · {{ camera.probe.fps }} fps{% endif %}
+        {% else %}
+          кодеки ещё не проверены
+        {% endif %}
+      </div>
+      <div class="tile-foot">
+        <span>{{ link_counts.get(camera.id, 0) }} ссылок</span>
+        {% if not camera.is_enabled %}
+          <span class="tag tag-muted">выключена</span>
+        {% else %}
+          <a class="btn btn-ghost" href="/cameras/{{ camera.id }}">Настройки</a>
+        {% endif %}
+      </div>
+    </div>
+  </article>
   {% endfor %}
 </div>
+
+<p class="muted small filter-empty" hidden>Ни одна камера не подходит под фильтр.</p>
+
+{# Просмотр прямо из списка: модальное окно с плеером, без ухода со страницы.
+   Поток поднимается только когда окно открыли, и глушится при закрытии. #}
+{% for camera in cameras %}
+  {% if camera.is_enabled %}
+  <div class="dialog-backdrop" id="watch-{{ camera.id }}" data-dialog hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-label="Просмотр камеры {{ camera.name }}">
+      <div class="dialog-head">
+        <div class="dialog-title">{{ camera.name }}</div>
+        <button type="button" class="btn btn-quiet btn-icon" data-dialog-close aria-label="Закрыть">
+          <svg class="i" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
+      </div>
+      {{ player_macro.player(
+           key=camera.mtx_path,
+           ticket='/cameras/' ~ camera.id ~ '/live/ticket',
+           audio=camera.audio_enabled,
+           poster='/cameras/' ~ camera.id ~ '/snapshot.jpg',
+           title=camera.name) }}
+      <div class="actions">
+        <a class="btn btn-secondary" href="/cameras/{{ camera.id }}">Настройки и ссылки</a>
+        <span class="hint">Просмотр из панели идёт по той же цепочке, что и публичная
+          ссылка, но без токена: если здесь картинка есть, а по ссылке нет — дело
+          в выдаче доступа, а не в потоке.</span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+{% endfor %}
+
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/player.js" defer></script>
 {% endblock %}

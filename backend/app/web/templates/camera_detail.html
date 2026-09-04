@@ -1,12 +1,38 @@
 {% extends "base.html" %}
+{% import "_player.html" as player_macro %}
 {% block title %}{{ camera.name }} — {{ app_name }}{% endblock %}
 {% block content %}
 
+<a class="btn btn-quiet" href="/">
+  <svg class="i" aria-hidden="true"><use href="#i-back"></use></svg>Все камеры
+</a>
+
 <div class="page-head">
-  <h1>{{ camera.name }}</h1>
-  <span class="status status-{{ camera.status.value }}">{{ camera.status.value }}</span>
+  <div>
+    <h1>{{ camera.name }}</h1>
+    <div class="subtitle">
+      <span class="state-{{ camera.status.value }}">{{ camera_status_labels[camera.status.value] }}</span>
+      · {{ camera.host }}:{{ camera.port }}
+      {%- if camera.probe and camera.probe.video_codec %}
+        · {{ camera.probe.video_codec|upper }}
+        {%- if camera.probe.width %} · {{ camera.probe.width }}×{{ camera.probe.height }}{% endif %}
+        {%- if camera.probe.fps %} · {{ camera.probe.fps }} fps{% endif %}
+      {%- endif %}
+    </div>
+    {% if camera.status_detail %}<div class="subtitle">{{ camera.status_detail }}</div>{% endif %}
+  </div>
+  <div class="actions">
+    <form method="post" action="/cameras/{{ camera.id }}/diagnose" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn-secondary" data-busy="Проверяю камеру…">
+        <svg class="i" aria-hidden="true"><use href="#i-pulse"></use></svg>Проверить сейчас
+      </button>
+    </form>
+    <button type="button" class="btn btn-primary" data-dialog-open="share-link">
+      <svg class="i" aria-hidden="true"><use href="#i-link"></use></svg>Выдать ссылку
+    </button>
+  </div>
 </div>
-{% if camera.status_detail %}<p class="muted">{{ camera.status_detail }}</p>{% endif %}
 
 {% if new_link_url %}
 <div class="alert alert-ok">
@@ -15,224 +41,289 @@
      {% if rotated %}Прежний адрес этой ссылки перестал работать.{% endif %}</p>
   <div class="copyrow">
     <input class="copyfield" type="text" readonly value="{{ new_link_url }}">
-    <button type="button" class="copybutton" data-copy-target="prev">Копировать</button>
+    <button type="button" class="btn btn-secondary copybutton" data-copy-target="prev">
+      <svg class="i" aria-hidden="true"><use href="#i-copy"></use></svg>Копировать
+    </button>
   </div>
   <details>
-    <summary>Код для встраивания на сайт</summary>
+    <summary class="hint">Код для встраивания на сайт</summary>
     <textarea class="copyfield" readonly rows="3">&lt;iframe src="{{ base_url }}/embed/{{ new_link.slug }}?t=…" width="640" height="360" frameborder="0" allowfullscreen&gt;&lt;/iframe&gt;</textarea>
-    <p class="hint">Подставьте в <code>?t=</code> токен из ссылки выше.</p>
+    <span class="hint">Подставьте в <code>?t=</code> токен из ссылки выше.</span>
   </details>
 </div>
 {% endif %}
 
-{# ── Диагностика ─────────────────────────────────────────────────────────── #}
-<section class="card">
-  <div class="page-head">
-    <h2>Диагностика</h2>
-    <div class="actions">
-      {# Просмотр из панели проходит ту же цепочку Caddy → forward_auth →
-         MediaMTX, что и публичная ссылка, но без токена. Если здесь картинка
-         есть, а по ссылке нет — сломана выдача доступа, а не поток. #}
-      <a class="button" href="/cameras/{{ camera.id }}/live" target="_blank"
-         rel="noopener">Смотреть из панели</a>
-      <form method="post" action="/cameras/{{ camera.id }}/diagnose" class="inline">
+<div class="detail-grid">
+  <div class="stack">
+
+    {# ── Просмотр ────────────────────────────────────────────────────────── #}
+    <section class="card card-flush">
+      {{ player_macro.player(
+           key=camera.mtx_path,
+           ticket='/cameras/' ~ camera.id ~ '/live/ticket',
+           audio=camera.audio_enabled,
+           poster='/cameras/' ~ camera.id ~ '/snapshot.jpg',
+           title=camera.name) }}
+
+      <div class="card-strip">
+        <dl class="kv">
+          <div>
+            <dt>Видео</dt>
+            <dd>{{ camera.probe.video_codec|upper if camera.probe and camera.probe.video_codec else '—' }}</dd>
+          </div>
+          <div>
+            <dt>Разрешение</dt>
+            <dd>{% if camera.probe and camera.probe.width %}{{ camera.probe.width }}×{{ camera.probe.height }}{% else %}—{% endif %}</dd>
+          </div>
+          <div>
+            <dt>Звук</dt>
+            <dd>{{ camera.probe.audio_codec|upper if camera.probe and camera.probe.audio_codec else 'нет' }}</dd>
+          </div>
+          <div>
+            <dt>Проверено</dt>
+            <dd>{{ camera.probed_at.strftime('%d.%m.%Y %H:%M') if camera.probed_at else '—' }}</dd>
+          </div>
+        </dl>
+        <p class="hint">
+          Просмотр из панели идёт по той же цепочке Caddy → forward_auth → MediaMTX,
+          что и публичная ссылка, но без токена: если картинка есть здесь и нет по
+          ссылке — сломана выдача доступа, а не поток.
+          <a href="/cameras/{{ camera.id }}/live" target="_blank" rel="noopener">Открыть в отдельной вкладке
+          <svg class="i" aria-hidden="true"><use href="#i-external"></use></svg></a>
+        </p>
+      </div>
+    </section>
+
+    {# ── Диагностика ─────────────────────────────────────────────────────── #}
+    {% if diagnosis %}
+    <section class="card">
+      <h2>Отчёт проверки</h2>
+      {% set frame = diagnosis_frame %}
+      {% include "_diagnosis.html" with context %}
+
+      {# Перекодирование предлагаем, когда браузер не покажет кодек либо когда
+         поток не смог забрать сам медиа-сервер: и то и другое лечится одинаково. #}
+      {% if camera.profile.value == 'passthrough' and diagnosis.failed
+            and diagnosis.failed | map(attribute='key') | select('in', ['webrtc', 'stream'])
+                | list %}
+      <form method="post" action="/cameras/{{ camera.id }}/profile">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="primary"
-                data-busy="Проверяю камеру…">Проверить сейчас</button>
+        <input type="hidden" name="profile" value="transcode">
+        <button type="submit" class="btn btn-primary">Включить перекодирование в H.264/Opus</button>
+        <span class="hint">Занимает примерно одно ядро CPU на камеру, зато поток тянет
+          ffmpeg и показывают его все браузеры.</span>
       </form>
-    </div>
+      {% endif %}
+    </section>
+    {% elif not camera.probe %}
+    <section class="card">
+      <h2>Проверка</h2>
+      <p class="muted">Проба кодеков ещё не выполнена — обычно занимает до минуты после
+         добавления. Кнопка «Проверить сейчас» делает полную проверку немедленно:
+         сеть, RTSP, кодеки, совместимость с браузером.</p>
+    </section>
+    {% endif %}
+
+    {# ── Настройки ───────────────────────────────────────────────────────── #}
+    <section class="card">
+      <form method="post" action="/cameras/{{ camera.id }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="page-head">
+          <h2>Настройки</h2>
+          <button type="submit" class="btn btn-primary">Сохранить</button>
+        </div>
+
+        <div class="field-row tight">
+          <div class="field">
+            <label for="camera-name">Название</label>
+            <input id="camera-name" type="text" name="name" value="{{ camera.name }}"
+                   required maxlength="200">
+          </div>
+          <div class="field">
+            <label for="camera-description">Описание</label>
+            <input id="camera-description" type="text" name="description"
+                   value="{{ camera.description }}" maxlength="2000"
+                   placeholder="западный въезд, стройплощадка">
+          </div>
+          <div class="field field-wide">
+            <label for="camera-url">Новая RTSP-ссылка</label>
+            <input id="camera-url" type="text" name="rtsp_url" autocomplete="off"
+                   spellcheck="false" placeholder="оставьте пустым, чтобы не менять">
+            <span class="hint">Текущая: <code>{{ camera.host }}:{{ camera.port }}</code>, пароль
+              не показывается. Вставьте ссылку ровно в том виде, в каком она работает
+              в VLC — спецсимволы логина и пароля сервис перекодирует сам.</span>
+          </div>
+          <div class="field">
+            <label for="camera-profile">Профиль обработки</label>
+            <select id="camera-profile" name="profile">
+              <option value="passthrough" {% if camera.profile.value == 'passthrough' %}selected{% endif %}>
+                Без перекодирования</option>
+              <option value="transcode" {% if camera.profile.value == 'transcode' %}selected{% endif %}>
+                Перекодировать в H.264/Opus</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="switch-row">
+          <div>
+            <div>Подключаться только при наличии зрителя</div>
+            <span class="hint">Экономит канал и камеру. Первый кадр появляется на 1–3 секунды позже.</span>
+          </div>
+          <label class="check">
+            <input type="checkbox" name="on_demand" {% if camera.on_demand %}checked{% endif %}>
+            <span class="muted small">по запросу</span>
+          </label>
+        </div>
+        <div class="switch-row">
+          <div>
+            <div>Передавать звук</div>
+            <span class="hint">Если камера отдаёт AAC, для браузера понадобится перекодирование.</span>
+          </div>
+          <label class="check">
+            <input type="checkbox" name="audio_enabled" {% if camera.audio_enabled %}checked{% endif %}>
+            <span class="muted small">включён</span>
+          </label>
+        </div>
+        <div class="switch-row">
+          <div>
+            <div>Камера включена</div>
+            <span class="hint">Выключенная камера снимается с медиа-сервера, ссылки перестают работать.</span>
+          </div>
+          <label class="check">
+            <input type="checkbox" name="is_enabled" {% if camera.is_enabled %}checked{% endif %}>
+            <span class="muted small">в работе</span>
+          </label>
+        </div>
+      </form>
+
+      <form method="post" action="/cameras/{{ camera.id }}/delete" class="danger-zone"
+            data-confirm="Удалить камеру «{{ camera.name }}» вместе со всеми ссылками?">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-danger">Удалить камеру и все её ссылки</button>
+      </form>
+    </section>
   </div>
 
-  {% if diagnosis %}
-    {% set frame = diagnosis_frame %}
-    {% include "_diagnosis.html" with context %}
-
-    {# Перекодирование предлагаем, когда браузер не покажет кодек либо когда
-       поток не смог забрать сам медиа-сервер: и то и другое лечится одинаково. #}
-    {% if camera.profile.value == 'passthrough' and diagnosis.failed
-          and diagnosis.failed | map(attribute='key') | select('in', ['webrtc', 'stream'])
-              | list %}
-    <form method="post" action="/cameras/{{ camera.id }}/profile" class="inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="profile" value="transcode">
-      <button type="submit" class="primary">Включить перекодирование в H.264/Opus</button>
-    </form>
-    <p class="hint">Занимает примерно одно ядро CPU на камеру, зато поток тянет ffmpeg
-       и показывают его все браузеры.</p>
-    {% endif %}
-
-  {% elif camera.probe %}
-    <dl class="kv">
-      <dt>Видео</dt><dd>{{ camera.probe.video_codec|upper or '—' }}
-        {%- if camera.probe.width %} · {{ camera.probe.width }}×{{ camera.probe.height }}{% endif %}
-        {%- if camera.probe.fps %} · {{ camera.probe.fps }} fps{% endif %}</dd>
-      <dt>Звук</dt><dd>{{ camera.probe.audio_codec|upper or 'нет' }}</dd>
-      <dt>Проверено</dt><dd>{{ camera.probed_at.strftime('%d.%m.%Y %H:%M') if camera.probed_at else '—' }}</dd>
-    </dl>
-    {% if camera.probe.error %}
-      <div class="alert alert-error">{{ camera.probe.error }}</div>
-    {% endif %}
-    {% for note in camera.probe.notes %}
-      <p class="{{ 'warn' if not camera.probe.video_ok or not camera.probe.audio_ok else 'muted' }}">{{ note }}</p>
-    {% endfor %}
-    <p class="hint">Это результат фоновой пробы кодеков. Кнопка выше проверяет ещё
-       сеть, RTSP-ответ камеры и состояние потока в медиа-сервере.</p>
-  {% else %}
-    <p class="muted">Проба кодеков ещё не выполнена — обычно занимает до минуты
-       после добавления. Кнопка «Проверить сейчас» делает полную проверку
-       немедленно: сеть, RTSP, кодеки, совместимость с браузером.</p>
-  {% endif %}
-</section>
-
-<div class="columns">
+  {# ── Ссылки ────────────────────────────────────────────────────────────── #}
   <section class="card">
-    <h2>Настройки</h2>
-    <form method="post" action="/cameras/{{ camera.id }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Название
-        <input type="text" name="name" value="{{ camera.name }}" required maxlength="200">
-      </label>
-      <label>Описание
-        <textarea name="description" rows="2" maxlength="2000">{{ camera.description }}</textarea>
-      </label>
-      <label>Новая RTSP-ссылка
-        <input type="text" name="rtsp_url" autocomplete="off" spellcheck="false"
-               placeholder="оставьте пустым, чтобы не менять">
-        <span class="hint">Текущая: <code>{{ camera.host }}:{{ camera.port }}</code>.
-          Пароль не показывается. Спецсимволы логина и пароля кодировать вручную
-          не нужно — вставьте ссылку ровно в том виде, в каком она работает в VLC.</span>
-      </label>
-      <label class="check">
-        <input type="checkbox" name="on_demand" {% if camera.on_demand %}checked{% endif %}>
-        Подключаться только при наличии зрителя
-      </label>
-      <label class="check">
-        <input type="checkbox" name="audio_enabled" {% if camera.audio_enabled %}checked{% endif %}>
-        Передавать звук
-      </label>
-      <label class="check">
-        <input type="checkbox" name="is_enabled" {% if camera.is_enabled %}checked{% endif %}>
-        Камера включена
-      </label>
-      <label>Профиль
-        <select name="profile">
-          <option value="passthrough" {% if camera.profile.value == 'passthrough' %}selected{% endif %}>
-            Без перекодирования</option>
-          <option value="transcode" {% if camera.profile.value == 'transcode' %}selected{% endif %}>
-            Перекодировать в H.264/Opus</option>
-        </select>
-      </label>
-      <div class="actions">
-        <button type="submit" class="primary">Сохранить</button>
+    <div class="page-head">
+      <h2>Кому открыт доступ</h2>
+      <button type="button" class="btn btn-ghost" data-dialog-open="share-link">
+        <svg class="i" aria-hidden="true"><use href="#i-plus"></use></svg>Ссылка
+      </button>
+    </div>
+
+    {% if links %}
+      {% for link in links %}
+      <div class="link-row">
+        <div class="link-row-head">
+          <span>{{ link.label or 'без названия' }}</span>
+          {% if link.revoked_at %}<span class="tag tag-off">отозвана</span>
+          {% elif link.expires_at and link.expires_at <= now %}<span class="tag tag-off">истекла</span>
+          {% else %}<span class="tag tag-ok">активна</span>{% endif %}
+        </div>
+        <div class="copyrow">
+          <input class="copyfield" type="text" readonly value="{{ base_url }}/v/{{ link.slug }}">
+          <button type="button" class="btn btn-secondary copybutton" data-copy-target="prev"
+                  aria-label="Копировать адрес">
+            <svg class="i" aria-hidden="true"><use href="#i-copy"></use></svg>
+          </button>
+        </div>
+        <div class="muted small">
+          {{ link.expires_at.strftime('до %d.%m.%Y %H:%M') if link.expires_at else 'бессрочно' }}
+          · {{ link.view_count }} просмотров
+          {%- if link.password_hash %} · пароль{% endif %}
+          {%- if link.allowed_cidrs %} · IP-фильтр{% endif %}
+        </div>
+        <div class="row-actions row-actions-left">
+          <form method="post" action="/links/{{ link.id }}/rotate" class="inline"
+                data-confirm="Перевыпустить токен? Прежний адрес этой ссылки перестанет работать, зрителей отключит.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-ghost">
+              <svg class="i" aria-hidden="true"><use href="#i-refresh"></use></svg>Перевыпустить
+            </button>
+          </form>
+          {% if not link.revoked_at %}
+          <form method="post" action="/links/{{ link.id }}/revoke" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-quiet">Отозвать</button>
+          </form>
+          {% endif %}
+          <form method="post" action="/links/{{ link.id }}/delete" class="inline"
+                data-confirm="Удалить ссылку без возможности восстановления?">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-quiet">Удалить</button>
+          </form>
+        </div>
       </div>
-    </form>
-
-    <form method="post" action="/cameras/{{ camera.id }}/delete" class="danger-zone"
-          data-confirm="Удалить камеру «{{ camera.name }}» вместе со всеми ссылками?">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="danger">Удалить камеру и все её ссылки</button>
-    </form>
+      {% endfor %}
+      <p class="hint">В базе лежит только хеш токена, поэтому показать адрес выданной
+         ранее ссылки невозможно. Потерян адрес — перевыпустите токен: ссылка останется
+         той же, старый адрес перестанет работать. Отозванная ссылка перестаёт работать
+         мгновенно — у зрителя обрывается поток.</p>
+    {% else %}
+      <p class="muted">Ссылок ещё нет. Публичная ссылка открывает камеру тому, у кого
+         её адрес, — и только на выданный срок.</p>
+    {% endif %}
   </section>
+</div>
 
-  <section class="card">
-    <h2>Новая публичная ссылка</h2>
+{# ── Диалог выдачи ссылки ───────────────────────────────────────────────── #}
+<div class="dialog-backdrop" id="share-link" data-dialog hidden>
+  <div class="dialog dialog-form" role="dialog" aria-modal="true" aria-label="Новая ссылка">
+    <div class="dialog-head">
+      <div class="dialog-title">Ссылка на камеру «{{ camera.name }}»</div>
+      <button type="button" class="btn btn-quiet btn-icon" data-dialog-close aria-label="Закрыть">
+        <svg class="i" aria-hidden="true"><use href="#i-close"></use></svg>
+      </button>
+    </div>
     <form method="post" action="/cameras/{{ camera.id }}/links">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Название
-        <input type="text" name="label" maxlength="200" placeholder="для кого ссылка">
-      </label>
-      <div class="field-pair">
-        <label>Срок действия
-          <select name="ttl">
+      <div class="field">
+        <label for="link-label">Для кого</label>
+        <input id="link-label" type="text" name="label" maxlength="200"
+               placeholder="подрядчик «СеверСтрой»">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="link-ttl">Срок действия</label>
+          <select id="link-ttl" name="ttl">
             <option value="1h">1 час</option>
             <option value="24h" selected>1 сутки</option>
             <option value="7d">7 дней</option>
             <option value="30d">30 дней</option>
             <option value="never">бессрочно</option>
           </select>
-        </label>
-        <label>Лимит зрителей
-          <input type="number" name="max_concurrent" value="0" min="0" max="10000">
+        </div>
+        <div class="field">
+          <label for="link-max">Лимит зрителей</label>
+          <input id="link-max" type="number" name="max_concurrent" value="0" min="0" max="10000">
           <span class="hint">0 — без ограничения</span>
-        </label>
-      </div>
-      <div class="field-pair">
-        <label>Разрешённые IP/CIDR
-          <input type="text" name="allowed_cidrs" placeholder="например 203.0.113.0/24">
+        </div>
+        <div class="field">
+          <label for="link-cidrs">Разрешённые IP/CIDR</label>
+          <input id="link-cidrs" type="text" name="allowed_cidrs" placeholder="203.0.113.0/24">
           <span class="hint">пусто — с любого адреса</span>
-        </label>
-        <label>Пароль на ссылку
-          <input type="password" name="link_password" autocomplete="new-password"
-                 placeholder="необязательно">
+        </div>
+        <div class="field">
+          <label for="link-password">Пароль на ссылку</label>
+          <input id="link-password" type="password" name="link_password"
+                 autocomplete="new-password" placeholder="необязательно">
           <span class="hint">спросим при открытии</span>
-        </label>
+        </div>
       </div>
-      <div class="actions">
-        <button type="submit" class="primary">Создать ссылку</button>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-secondary" data-dialog-close>Отмена</button>
+        <button type="submit" class="btn btn-primary">
+          <svg class="i" aria-hidden="true"><use href="#i-link"></use></svg>Создать ссылку
+        </button>
       </div>
     </form>
-  </section>
+  </div>
 </div>
 
-<section class="card">
-  <h2>Выданные ссылки</h2>
+{% endblock %}
 
-  {% if links %}
-  <p class="hint">В базе хранится только хеш токена, поэтому показать полный адрес
-     выданной ранее ссылки невозможно. Если адрес потерян — перевыпустите токен:
-     ссылка останется той же, а старый адрес перестанет работать.</p>
-  <div class="table-wrap">
-  <table class="table">
-    <thead>
-      <tr><th>Название</th><th>Адрес</th><th>Действует до</th><th>Просмотров</th>
-          <th>Состояние</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for link in links %}
-      <tr>
-        <td>{{ link.label or '—' }}</td>
-        <td class="cell-address">
-          <div class="copyrow">
-            <input class="copyfield" type="text" readonly
-                   value="{{ base_url }}/v/{{ link.slug }}">
-            <button type="button" class="copybutton" data-copy-target="prev">Копировать</button>
-          </div>
-          <span class="hint">без токена — адрес не откроется</span>
-        </td>
-        <td class="nowrap">{{ link.expires_at.strftime('%d.%m.%Y %H:%M') if link.expires_at else 'бессрочно' }}</td>
-        <td>{{ link.view_count }}</td>
-        <td>
-          {% if link.revoked_at %}<span class="badge badge-off">отозвана</span>
-          {% elif link.expires_at and link.expires_at <= now %}<span class="badge badge-off">истекла</span>
-          {% else %}<span class="badge badge-on">активна</span>{% endif %}
-          {% if link.password_hash %}<span class="badge">пароль</span>{% endif %}
-          {% if link.allowed_cidrs %}<span class="badge">IP-фильтр</span>{% endif %}
-        </td>
-        <td class="row-actions">
-          <form method="post" action="/links/{{ link.id }}/rotate" class="inline"
-                data-confirm="Перевыпустить токен? Прежний адрес этой ссылки перестанет работать, зрителей отключит.">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit">Перевыпустить</button>
-          </form>
-          {% if not link.revoked_at %}
-          <form method="post" action="/links/{{ link.id }}/revoke" class="inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit">Отозвать</button>
-          </form>
-          {% endif %}
-          <form method="post" action="/links/{{ link.id }}/delete" class="inline"
-                data-confirm="Удалить ссылку без возможности восстановления?">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="danger">Удалить</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% else %}
-    <p class="muted">Ссылок ещё нет.</p>
-  {% endif %}
-</section>
+{% block scripts %}
+<script src="/static/player.js" defer></script>
 {% endblock %}

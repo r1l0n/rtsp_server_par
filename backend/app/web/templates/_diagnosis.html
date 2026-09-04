@@ -11,7 +11,7 @@
 {% if frame %}
 <figure class="frame">
   <img src="{{ frame }}" alt="Кадр с камеры">
-  <figcaption class="hint">Кадр получен сервисом только что.</figcaption>
+  <figcaption>Кадр получен сервисом только что.</figcaption>
 </figure>
 {% endif %}
 
@@ -33,6 +33,6 @@
 <details class="raw">
   <summary>Полный вывод ffprobe</summary>
   <pre class="log">{{ diagnosis.raw }}</pre>
-  <p class="hint">Пароль в выводе замаскирован — этот текст можно пересылать как есть.</p>
+  <span class="hint">Пароль в выводе замаскирован — этот текст можно пересылать как есть.</span>
 </details>
 {% endif %}

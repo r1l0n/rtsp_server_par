@@ -1,43 +1,82 @@
-html, body { height: 100%; }
-
-body.player-page {
-  margin: 0;
-  background: #000;
-  color: #e6e9ee;
-  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-}
+/* Плеер. Один и тот же компонент в трёх местах:
+ *
+ *   - страница публичной ссылки  (.player-page — во весь экран);
+ *   - iframe встраивания          (body.embed — высоту задаёт хост-страница);
+ *   - карточка камеры в панели    (.player-inline — по ширине карточки).
+ *
+ * Разметка везде одинаковая, различается только обёртка: так исправление в
+ * плеере не приходится повторять трижды.
+ *
+ * Токены берутся из app.css — его подключают все три страницы.
+ */
 
 .player {
   position: relative;
   width: 100%;
-  height: 100vh;
   background: #000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: hidden;
 }
 
 .player video {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: #000;
 }
 
-.player-overlay {
+/* Плашка состояния. Не inset: 0 — иначе она накрывает панель управления, и до
+   кнопок переключения транспорта не добраться именно тогда, когда они нужны. */
+.player-status {
   position: absolute;
-  /* Не inset: 0 — иначе плашка накрывает панель управления, и до кнопок
-     переключения транспорта не добраться именно тогда, когда они нужны. */
-  inset: 0 0 56px;
+  inset: 0 0 48px;
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, 0.55);
+  padding: var(--space-6);
+  background: color-mix(in srgb, #000 55%, transparent);
+  color: var(--neutral-200);
+  font-size: 14px;
+  line-height: 1.5;
   pointer-events: none;
 }
-.player-overlay[hidden] { display: none; }
+
+/* Заставка со снапшотом: поток не поднимается, пока его не попросили. Камера
+   с on_demand иначе подключалась бы на каждое открытие страницы. */
+.player-poster {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  background: var(--neutral-900);
+  color: var(--text);
+  cursor: pointer;
+}
+.player-poster img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.55;
+}
+.player-poster-label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  box-shadow: var(--shadow-sm);
+  font: 500 14px/1.2 var(--font);
+}
+.player-poster-label .i { width: 20px; height: 20px; }
+.player-poster:hover .player-poster-label { color: var(--accent); }
 
 .player-bar {
   position: absolute;
@@ -46,9 +85,9 @@ body.player-page {
   bottom: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: linear-gradient(to top, color-mix(in srgb, #000 82%, transparent), transparent);
   opacity: 0;
   transition: opacity 0.15s;
 }
@@ -56,37 +95,61 @@ body.player-page {
 .player:focus-within .player-bar,
 .player.has-status .player-bar { opacity: 1; }
 
-.player-title { font-weight: 600; }
-.player-transport { color: #98a1ad; font-size: 12px; margin-right: auto; }
+.player-title {
+  font-weight: 500;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-transport {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--neutral-400);
+  white-space: nowrap;
+}
 
 .player-button {
-  font: inherit;
-  color: #e6e9ee;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 10px;
+  font: 500 13px/1.2 var(--font);
+  color: var(--neutral-100);
+  background: color-mix(in srgb, #fff 12%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 20%, transparent);
+  border-radius: var(--radius-md);
   cursor: pointer;
+  white-space: nowrap;
 }
-.player-button:hover { background: rgba(255, 255, 255, 0.2); }
-.player-button[hidden] { display: none; }
+.player-button:hover { background: color-mix(in srgb, #fff 22%, transparent); }
+.player-button .i { width: 15px; height: 15px; }
 
-/* Переключатель транспорта: слитная группа из трёх кнопок. */
+/* Переключатель транспорта — слитная группа из трёх кнопок. Единственный
+   способ быстро понять, что именно не работает в конкретной сети. */
 .player-modes { display: inline-flex; }
-.player-mode {
-  border-radius: 0;
-  padding: 6px 10px;
-  font-size: 13px;
-  border-left-width: 0;
-}
-.player-mode:first-child { border-radius: 8px 0 0 8px; border-left-width: 1px; }
-.player-mode:last-child { border-radius: 0 8px 8px 0; }
+.player-mode { border-radius: 0; padding: 5px 9px; border-left-width: 0; }
+.player-mode:first-child { border-radius: var(--radius-md) 0 0 var(--radius-md); border-left-width: 1px; }
+.player-mode:last-child { border-radius: 0 var(--radius-md) var(--radius-md) 0; }
 .player-mode.is-active {
-  background: rgba(255, 255, 255, 0.32);
-  border-color: rgba(255, 255, 255, 0.45);
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-/* Во встроенном плеере высоту задаёт хост-страница. Панель управления там
-   тоже есть — без переключателя транспорта iframe нечем диагностировать. */
+/* ── Обёртки ───────────────────────────────────────────────────────────── */
+body.player-page {
+  margin: 0;
+  background: #000;
+  height: 100%;
+}
+body.player-page .player { height: 100vh; }
 body.embed .player { height: 100%; }
-body.embed .player-overlay { inset: 0 0 44px; }
+body.embed .player-status { inset: 0 0 40px; }
+
+/* В панели плеер живёт в карточке и держит пропорции кадра. */
+.player-inline { aspect-ratio: 16 / 9; border-radius: 0; }
+.player-inline .player-status { font-size: 13px; padding: var(--space-4); }
+
+/* Плеер в модальном окне списка камер: занимает ширину диалога. */
+.dialog .player-inline { border-radius: var(--radius-md); }

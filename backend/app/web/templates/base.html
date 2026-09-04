@@ -4,33 +4,49 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
+  {% if csrf_token %}<meta name="csrf-token" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/player.css">
 </head>
 <body>
+
+{% include "_icons.html" %}
+
 {% if user %}
 <header class="topbar">
-  <a class="brand" href="/">{{ app_name }}</a>
-  <nav>
-    <a href="/">Камеры</a>
-    {% if user.role == Role.admin %}
-      <a href="/admin/users">Пользователи</a>
-      <a href="/admin/audit">Журнал</a>
-    {% endif %}
-    <a href="/profile">{{ user.email }}</a>
-    <form method="post" action="/logout" class="inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="link-button">Выйти</button>
-    </form>
-  </nav>
+  <div class="topbar-inner">
+    <a class="brand" href="/">RTSP Gateway</a>
+    <nav>
+      <a href="/" {% if request.url.path == '/' or request.url.path.startswith('/cameras') %}aria-current="page"{% endif %}>Камеры</a>
+      {% if user.role == Role.admin %}
+        <a href="/admin/users" {% if request.url.path.startswith('/admin/users') %}aria-current="page"{% endif %}>Пользователи</a>
+        <a href="/admin/audit" {% if request.url.path.startswith('/admin/audit') %}aria-current="page"{% endif %}>Журнал</a>
+      {% endif %}
+    </nav>
+    <div class="topbar-right">
+      {% set who = (user.full_name or user.email).split() %}
+      <a class="btn btn-secondary" href="/profile">
+        <span class="avatar">{{ (who[0][0] ~ (who[1][0] if who|length > 1 else ''))|upper }}</span>
+        Профиль
+      </a>
+      <form method="post" action="/logout" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-quiet">Выйти</button>
+      </form>
+    </div>
+  </div>
+  <div class="topbar-rule"></div>
 </header>
 {% endif %}
 
-<main class="container">
+<main class="container {% block container_class %}{% endblock %}">
   {% if notice %}<div class="alert alert-ok">{{ notice }}</div>{% endif %}
   {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
   {% block content %}{% endblock %}
 </main>
+
 {% if user %}<script src="/static/panel.js" defer></script>{% endif %}
+{% block scripts %}{% endblock %}
 </body>
 </html>

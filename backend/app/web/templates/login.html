@@ -2,17 +2,21 @@
 {% block title %}Вход — {{ app_name }}{% endblock %}
 {% block content %}
 <div class="card card-narrow">
-  <h1>Вход</h1>
+  <h1>{{ app_name }}</h1>
+  <p class="muted small">Просмотр камер и выдача публичных ссылок.</p>
   <form method="post" action="/login">
     <input type="hidden" name="next" value="{{ next }}">
-    <label>Электронная почта
-      <input type="email" name="email" value="{{ email|default('') }}" required autofocus
-             autocomplete="username">
-    </label>
-    <label>Пароль
-      <input type="password" name="password" required autocomplete="current-password">
-    </label>
-    <button type="submit" class="primary">Войти</button>
+    <div class="field">
+      <label for="login-email">Электронная почта</label>
+      <input id="login-email" type="email" name="email" value="{{ email|default('') }}"
+             required autofocus autocomplete="username">
+    </div>
+    <div class="field">
+      <label for="login-password">Пароль</label>
+      <input id="login-password" type="password" name="password" required
+             autocomplete="current-password">
+    </div>
+    <button type="submit" class="btn btn-primary btn-block">Войти</button>
   </form>
 </div>
 {% endblock %}

@@ -20,6 +20,26 @@ templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 templates.env.globals["app_name"] = "RTSP Gateway"
 templates.env.globals["Role"] = Role
 
+#: Состояния камеры и роли по-русски. Раньше в интерфейс попадали сами значения
+#: enum («idle», «operator»), и оператору приходилось догадываться, что idle —
+#: это норма для камеры on-demand, а не поломка.
+CAMERA_STATUS_LABELS: dict[str, str] = {
+    "online": "в эфире",
+    "idle": "ждёт зрителя",
+    "offline": "нет связи",
+    "error": "ошибка",
+    "unknown": "не проверена",
+}
+
+ROLE_LABELS: dict[str, str] = {
+    "admin": "администратор",
+    "operator": "оператор",
+    "viewer": "наблюдатель",
+}
+
+templates.env.globals["camera_status_labels"] = CAMERA_STATUS_LABELS
+templates.env.globals["role_labels"] = ROLE_LABELS
+
 
 def _format_timestamp(value: float) -> str:
     """Unix-время из Redis-сессии -> локальная строка."""

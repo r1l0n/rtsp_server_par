@@ -2,43 +2,54 @@
 {% block title %}Двухфакторная аутентификация — {{ app_name }}{% endblock %}
 {% block content %}
 <div class="card card-narrow">
-<h1>Двухфакторная аутентификация</h1>
+  <h1>Двухфакторная аутентификация</h1>
 
-{% if already_enabled %}
-  <p><span class="badge badge-on">включена</span></p>
-  {% if totp_mandatory %}
-    <p class="muted">Политика компании требует второй фактор для вашей роли — отключить нельзя.</p>
+  {% if already_enabled %}
+    <p><span class="tag tag-ok">включена</span></p>
+    {% if totp_mandatory %}
+      <p class="muted small">Политика компании требует второй фактор для вашей роли —
+         отключить нельзя.</p>
+    {% else %}
+      <form method="post" action="/profile/2fa/disable"
+            data-confirm="Отключить второй фактор? Вход будет защищён только паролем.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="field">
+          <label for="tfa-password">Подтвердите паролем</label>
+          <input id="tfa-password" type="password" name="current_password" required
+                 autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn btn-danger">Отключить</button>
+      </form>
+    {% endif %}
+    <p><a href="/profile">Назад в профиль</a></p>
   {% else %}
-    <form method="post" action="/profile/2fa/disable"
-          data-confirm="Отключить второй фактор? Вход будет защищён только паролем.">
+    <ol class="steps">
+      <li>Откройте приложение-аутентификатор (Google Authenticator, Aegis, 1Password).</li>
+      <li>Отсканируйте QR-код или введите ключ вручную.</li>
+      <li>Введите шестизначный код, чтобы подтвердить настройку.</li>
+    </ol>
+
+    <div class="qr">{{ qr | safe }}</div>
+
+    <div class="field">
+      <label for="tfa-secret">Ключ для ручного ввода</label>
+      <div class="copyrow">
+        <input id="tfa-secret" class="copyfield" type="text" readonly value="{{ secret }}">
+        <button type="button" class="btn btn-secondary copybutton" data-copy-target="prev">
+          <svg class="i" aria-hidden="true"><use href="#i-copy"></use></svg>
+        </button>
+      </div>
+    </div>
+
+    <form method="post" action="/profile/2fa/enable">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Подтвердите паролем
-        <input type="password" name="current_password" required autocomplete="current-password">
-      </label>
-      <button type="submit" class="danger">Отключить</button>
+      <div class="field">
+        <label for="tfa-code">Код из приложения</label>
+        <input id="tfa-code" type="text" name="code" required autofocus inputmode="numeric"
+               autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
+      </div>
+      <button type="submit" class="btn btn-primary">Включить</button>
     </form>
   {% endif %}
-  <p><a href="/profile">Назад в профиль</a></p>
-{% else %}
-  <ol class="steps">
-    <li>Откройте приложение-аутентификатор (Google Authenticator, Aegis, 1Password).</li>
-    <li>Отсканируйте QR-код или введите ключ вручную.</li>
-    <li>Введите шестизначный код, чтобы подтвердить настройку.</li>
-  </ol>
-
-  <div class="qr">{{ qr | safe }}</div>
-
-  <p class="muted">Ключ для ручного ввода:</p>
-  <input class="copyfield" type="text" readonly value="{{ secret }}">
-
-  <form method="post" action="/profile/2fa/enable">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>Код из приложения
-      <input type="text" name="code" required autofocus inputmode="numeric"
-             autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
-    </label>
-    <button type="submit" class="primary">Включить</button>
-  </form>
-{% endif %}
 </div>
 {% endblock %}

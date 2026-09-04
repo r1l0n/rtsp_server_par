@@ -1,67 +1,79 @@
 {% extends "base.html" %}
 {% block title %}Новая камера — {{ app_name }}{% endblock %}
+{% block container_class %}container-narrow{% endblock %}
 {% block content %}
+
+<a class="btn btn-quiet" href="/">
+  <svg class="i" aria-hidden="true"><use href="#i-back"></use></svg>Все камеры
+</a>
+
+<div class="page-head">
+  <div>
+    <h1>Добавить камеру</h1>
+    <div class="subtitle">Нужна RTSP-ссылка камеры — та же, что открывается в VLC</div>
+  </div>
+</div>
 
 {% if preview %}
 <section class="card">
   <h2>Предпросмотр</h2>
   {% if normalized_url %}
-    <p class="hint">Адрес приведён к каноническому виду:
-       <code>{{ normalized_url }}</code> — спецсимволы логина и пароля
-       перекодированы автоматически.</p>
+    <p class="hint">Адрес приведён к каноническому виду: <code>{{ normalized_url }}</code> —
+       спецсимволы логина и пароля перекодированы автоматически.</p>
   {% endif %}
   {# Общий блок отчёта ждёт diagnosis и frame — связываем их с переменными
      предпросмотра, иначе он молча отрисуется пустым. #}
   {% set diagnosis = preview %}
   {% set frame = preview_frame %}
   {% include "_diagnosis.html" with context %}
-  <p class="hint">Камера ещё не сохранена. Ссылку в форме ниже мы не показываем —
-     чтобы пароль не осел в кэше браузера, — поэтому перед сохранением вставьте
-     её ещё раз.</p>
+  <p class="hint">Камера ещё не сохранена. Ссылку в форме ниже мы не показываем — чтобы
+     пароль не осел в кэше браузера, — поэтому перед сохранением вставьте её ещё раз.</p>
 </section>
 {% endif %}
 
-<div class="card">
-  <h1>Добавить камеру</h1>
+<section class="card">
   <form method="post" action="/cameras">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-    <label>Название
-      <input type="text" name="name" required maxlength="200"
-             value="{{ form.name if form else '' }}" autofocus>
-    </label>
+    <div class="field">
+      <label for="new-name">Название</label>
+      <input id="new-name" type="text" name="name" required maxlength="200"
+             value="{{ form.name if form else '' }}" placeholder="например: Северный въезд" autofocus>
+    </div>
 
-    <label>RTSP-ссылка
-      <input type="text" name="rtsp_url" required autocomplete="off" spellcheck="false"
-             placeholder="rtsp://логин:пароль@31.148.246.249:4259/stream">
-      <span class="hint">Вставьте ссылку ровно в том виде, в каком она работает в VLC:
+    <div class="field">
+      <label for="new-url">RTSP-ссылка</label>
+      <input id="new-url" type="text" name="rtsp_url" required autocomplete="off"
+             spellcheck="false" placeholder="rtsp://логин:пароль@31.148.246.249:4259/stream">
+      <span class="hint">Вставьте ровно в том виде, в каком она работает в VLC:
         спецсимволы логина и пароля (<code>!</code>, <code>@</code>, <code>#</code>,
         <code>/</code>, <code>%</code>) сервис перекодирует сам. Нельзя только пробелы
         и кавычки. Ссылка хранится в зашифрованном виде и зрителям не показывается.</span>
-    </label>
+    </div>
 
-    <label>Описание
-      <textarea name="description" rows="2" maxlength="2000">{{ form.description if form else '' }}</textarea>
-    </label>
+    <div class="field">
+      <label for="new-description">Описание</label>
+      <textarea id="new-description" name="description" rows="2"
+                maxlength="2000">{{ form.description if form else '' }}</textarea>
+    </div>
 
     <fieldset>
       <legend>Режим потока</legend>
       <label class="check">
-        <input type="checkbox" name="on_demand"
-               {% if not form or form.on_demand %}checked{% endif %}>
-        Подключаться к камере только когда есть зритель
-        <span class="hint">Экономит канал и нагрузку на камеру. Первый кадр появляется
-          на 1–3 секунды позже.</span>
+        <input type="checkbox" name="on_demand" {% if not form or form.on_demand %}checked{% endif %}>
+        <span>Подключаться к камере только когда есть зритель
+          <span class="hint">Экономит канал и нагрузку на камеру. Первый кадр появляется
+            на 1–3 секунды позже.</span>
+        </span>
       </label>
       <label class="check">
-        <input type="checkbox" name="audio_enabled"
-               {% if not form or form.audio_enabled %}checked{% endif %}>
-        Передавать звук
+        <input type="checkbox" name="audio_enabled" {% if not form or form.audio_enabled %}checked{% endif %}>
+        <span>Передавать звук</span>
       </label>
-      <label>Профиль
-        <select name="profile">
-          <option value="passthrough"
-                  {% if not form or form.profile == 'passthrough' %}selected{% endif %}>
+      <div class="field">
+        <label for="new-profile">Профиль</label>
+        <select id="new-profile" name="profile">
+          <option value="passthrough" {% if not form or form.profile == 'passthrough' %}selected{% endif %}>
             Без перекодирования (рекомендуется)</option>
           <option value="transcode" {% if form and form.profile == 'transcode' %}selected{% endif %}>
             Перекодировать в H.264/Opus</option>
@@ -69,19 +81,21 @@
         <span class="hint">Перекодирование нужно, если камера отдаёт H.265, звук в AAC
           или если медиа-сервер не может забрать поток напрямую. Оно занимает примерно
           одно ядро CPU на камеру. Кнопка «Проверить» ниже скажет, нужно ли оно.</span>
-      </label>
+      </div>
     </fieldset>
 
     {# formaction вместо JS: CSP запрещает инлайновые обработчики, а вторая
        кнопка submit с другим адресом делает то же самое и без скриптов. #}
     <div class="actions">
-      <button type="submit" formaction="/cameras/preview" formnovalidate
-              data-busy="Подключаюсь к камере…">Проверить и показать кадр</button>
-      <button type="submit" class="primary">Добавить</button>
-      <a class="button" href="/">Отмена</a>
+      <button type="submit" class="btn btn-secondary" formaction="/cameras/preview" formnovalidate
+              data-busy="Подключаюсь к камере…">
+        <svg class="i" aria-hidden="true"><use href="#i-pulse"></use></svg>Проверить и показать кадр
+      </button>
+      <button type="submit" class="btn btn-primary">Добавить</button>
+      <a class="btn btn-quiet" href="/">Отмена</a>
     </div>
     <span class="hint">Проверка идёт до полуминуты: сервис подключится к камере,
       снимет кадр и скажет, покажет ли этот поток браузер.</span>
   </form>
-</div>
+</section>
 {% endblock %}

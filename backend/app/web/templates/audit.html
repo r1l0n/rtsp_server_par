@@ -1,17 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Журнал — {{ app_name }}{% endblock %}
 {% block content %}
-<h1>Журнал событий</h1>
 
-<form method="get" action="/admin/audit" class="row-form">
-  <label>Действие
-    <input type="text" name="action" value="{{ action }}" placeholder="например login.failed">
-  </label>
-  <button type="submit">Фильтровать</button>
-  {% if action %}<a class="button" href="/admin/audit">Сбросить</a>{% endif %}
-</form>
+<div class="page-head">
+  <div>
+    <h1>Журнал событий</h1>
+    <div class="subtitle">Все действия в шлюзе: входы, камеры, ссылки, отказы доступа</div>
+  </div>
+  <form method="get" action="/admin/audit" class="actions">
+    <input type="text" name="action" value="{{ action }}" placeholder="login.failed, link.viewed…"
+           aria-label="Фильтр по действию" class="filter-input">
+    <button type="submit" class="btn btn-secondary">Фильтровать</button>
+    {% if action %}<a class="btn btn-quiet" href="/admin/audit">Сбросить</a>{% endif %}
+  </form>
+</div>
 
 <section class="card">
+  <div class="table-wrap">
   <table class="table">
     <thead>
       <tr><th>Время</th><th>Действие</th><th>Кто</th><th>IP</th><th>Объект</th><th>Детали</th></tr>
@@ -19,25 +24,26 @@
     <tbody>
       {% for e in entries %}
       <tr>
-        <td class="nowrap">{{ e.created_at.strftime('%d.%m.%Y %H:%M:%S') }}</td>
-        <td><code>{{ e.action }}</code></td>
-        <td>{{ actors.get(e.actor_id) or e.actor_label or '—' }}</td>
-        <td><code>{{ e.ip }}</code></td>
+        <td class="muted small nowrap">{{ e.created_at.strftime('%d.%m.%Y %H:%M:%S') }}</td>
+        <td><span class="tag tag-neutral">{{ e.action }}</span></td>
+        <td class="small">{{ actors.get(e.actor_id) or e.actor_label or '—' }}</td>
+        <td class="muted small">{{ e.ip }}</td>
         <td class="muted small">{{ e.target_type }}{% if e.target_id %} {{ e.target_id[:8] }}{% endif %}</td>
         <td class="muted small ellipsis">{{ e.meta }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% if not entries %}<p class="muted">Записей нет.</p>{% endif %}
 </section>
 
 <div class="pager">
   {% if page > 0 %}
-    <a class="button" href="/admin/audit?page={{ page - 1 }}&action={{ action }}">Назад</a>
+    <a class="btn btn-secondary" href="/admin/audit?page={{ page - 1 }}&action={{ action }}">Назад</a>
   {% endif %}
   {% if has_next %}
-    <a class="button" href="/admin/audit?page={{ page + 1 }}&action={{ action }}">Вперёд</a>
+    <a class="btn btn-secondary" href="/admin/audit?page={{ page + 1 }}&action={{ action }}">Вперёд</a>
   {% endif %}
 </div>
 {% endblock %}
