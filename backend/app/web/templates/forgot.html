@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Восстановление пароля — {{ app_name }}{% endblock %}
+{% block content %}
+<div class="card card-narrow">
+  <h1>Забыли пароль?</h1>
+
+  {% if done %}
+    <p class="muted small">{{ message }}</p>
+    <a class="btn btn-secondary btn-block" href="/login">Вернуться ко входу</a>
+  {% else %}
+    <p class="muted small">Укажите адрес, на который заведена учётная запись.
+       Пришлём ссылку для смены пароля.</p>
+    <form method="post" action="/forgot">
+      <div class="field">
+        <label for="forgot-email">Электронная почта</label>
+        <input id="forgot-email" type="email" name="email" required autofocus
+               autocomplete="username" maxlength="320">
+      </div>
+      <button type="submit" class="btn btn-primary btn-block">Отправить ссылку</button>
+    </form>
+    <p class="hint center"><a href="/login">Вспомнил пароль</a></p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -53,7 +53,7 @@
           {% else %}<span class="tag tag-off">выключена</span>{% endif %}
         </td>
         <td class="muted small nowrap">
-          {{ u.last_login_at.strftime('%d.%m.%Y %H:%M') if u.last_login_at else 'ни разу' }}
+          {{ u.last_login_at|dt if u.last_login_at else 'ни разу' }}
         </td>
         <td class="row-actions">
           {% if u.id != user.id %}
@@ -99,8 +99,8 @@
           {% else %}<span class="tag tag-off">не отправлено</span>{% endif %}
         </td>
         <td class="muted small nowrap">
-          {% if expired %}истекло {{ inv.expires_at.strftime('%d.%m.%Y %H:%M') }}
-          {% else %}{{ inv.expires_at.strftime('%d.%m.%Y %H:%M') }}{% endif %}
+          {% if expired %}истекло {{ inv.expires_at|dt }}
+          {% else %}{{ inv.expires_at|dt }}{% endif %}
         </td>
         <td class="row-actions">
           <form method="post" action="/admin/invites/{{ inv.id }}/resend" class="inline">

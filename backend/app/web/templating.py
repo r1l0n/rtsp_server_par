@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import functools
 import hashlib
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -74,20 +77,92 @@ ROLE_LABELS: dict[str, str] = {
     "viewer": "наблюдатель",
 }
 
+#: Журнал читают люди, а не грепают машины. Ключи остаются английскими —
+#: по ним фильтруют и их же видно в логах сервиса.
+AUDIT_ACTION_LABELS: dict[str, str] = {
+    "login.ok": "вход выполнен",
+    "login.failed": "неудачный вход",
+    "login.locked": "учётная запись заблокирована",
+    "logout": "выход",
+    "totp.enabled": "двухфакторная включена",
+    "totp.disabled": "двухфакторная выключена",
+    "totp.failed": "неверный код подтверждения",
+    "totp.recovery_used": "вход по коду восстановления",
+    "password.changed": "пароль изменён",
+    "password.reset_requested": "запрошено восстановление пароля",
+    "password.reset_done": "пароль восстановлен по ссылке",
+    "session.revoked": "остальные сеансы завершены",
+    "user.created": "пользователь создан",
+    "user.updated": "пользователь изменён",
+    "user.disabled": "пользователь отключён",
+    "invite.created": "приглашение выписано",
+    "invite.sent": "приглашение отправлено",
+    "invite.send_failed": "письмо с приглашением не ушло",
+    "invite.revoked": "приглашение отозвано",
+    "invite.accepted": "приглашение принято",
+    "camera.created": "камера добавлена",
+    "camera.updated": "камера изменена",
+    "camera.deleted": "камера удалена",
+    "link.created": "ссылка выдана",
+    "link.revoked": "ссылка отозвана",
+    "link.rotated": "адрес ссылки перевыпущен",
+    "link.deleted": "ссылка удалена",
+    "link.viewed": "просмотр по ссылке",
+    "link.denied": "отказано в доступе",
+    "mail.settings_updated": "настройки почты изменены",
+    "mail.test_sent": "проверочное письмо отправлено",
+    "mail.test_failed": "проверочное письмо не ушло",
+}
+
+templates.env.globals["audit_action_labels"] = AUDIT_ACTION_LABELS
 templates.env.globals["camera_status_labels"] = CAMERA_STATUS_LABELS
 templates.env.globals["role_labels"] = ROLE_LABELS
 
 
-def _format_timestamp(value: float) -> str:
-    """Unix-время из Redis-сессии -> локальная строка."""
-    import datetime as dt
+#: Время человеку показываем местное, в БД и логах всё остаётся в UTC.
+#: Отдельный фильтр, а не strftime по месту: иначе часть страниц осталась бы
+#: в UTC, и никто бы не заметил — расхождение видно только рядом с часами.
+DATETIME_FORMAT = "%d.%m.%Y %H:%M"
 
+
+@functools.lru_cache(maxsize=4)
+def display_tz(name: str) -> ZoneInfo | dt.tzinfo:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        # База часовых поясов не установлена — показываем UTC, но не падаем:
+        # неверное время в журнале лучше, чем пятисотка на каждой странице.
+        return dt.UTC
+
+
+def format_datetime(value: dt.datetime | None, fmt: str = DATETIME_FORMAT) -> str:
+    if value is None:
+        return "—"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.UTC)
+    return value.astimezone(display_tz(get_settings().display_timezone)).strftime(fmt)
+
+
+def _format_timestamp(value: float) -> str:
+    """Unix-время из Redis-сессии -> местная строка."""
     if not value:
         return "—"
-    return dt.datetime.fromtimestamp(value, dt.UTC).strftime("%d.%m.%Y %H:%M")
+    return format_datetime(dt.datetime.fromtimestamp(value, dt.UTC))
 
 
 templates.env.filters["timestamp"] = _format_timestamp
+templates.env.filters["dt"] = format_datetime
+def timezone_label() -> str:
+    """Смещение вместо имени зоны: «UTC+5» понятно без карты часовых поясов."""
+    offset = dt.datetime.now(display_tz(get_settings().display_timezone)).utcoffset()
+    if offset is None:
+        return "UTC"
+    hours, remainder = divmod(int(offset.total_seconds()), 3600)
+    minutes = remainder // 60
+    return f"UTC{hours:+d}" + (f":{minutes:02d}" if minutes else "")
+
+
+templates.env.globals["timezone_label"] = timezone_label
 
 
 #: Тема оформления. Хранится в cookie, а не в профиле: она про устройство,
@@ -187,6 +262,7 @@ NOTICES: dict[str, str] = {
     "mail_saved": "Настройки почты сохранены.",
     "mail_test_sent": "Проверочное письмо отправлено. Проверьте ящик — и папку «Спам».",
     "logged_out": "Вы вышли из системы.",
+    "password_reset": "Пароль изменён. Войдите с новым паролем.",
 }
 
 

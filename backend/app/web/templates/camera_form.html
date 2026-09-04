@@ -10,7 +10,6 @@
 <div class="page-head">
   <div>
     <h1>Добавить камеру</h1>
-    <div class="subtitle">Нужна RTSP-ссылка камеры — та же, что открывается в VLC</div>
   </div>
 </div>
 
@@ -26,8 +25,7 @@
   {% set diagnosis = preview %}
   {% set frame = preview_frame %}
   {% include "_diagnosis.html" with context %}
-  <p class="hint">Камера ещё не сохранена. Ссылку в форме ниже мы не показываем — чтобы
-     пароль не осел в кэше браузера, — поэтому перед сохранением вставьте её ещё раз.</p>
+  <p class="hint">Камера ещё не сохранена — нажмите «Добавить» ниже.</p>
 </section>
 {% endif %}
 
@@ -44,11 +42,8 @@
     <div class="field">
       <label for="new-url">RTSP-ссылка</label>
       <input id="new-url" type="text" name="rtsp_url" required autocomplete="off"
-             spellcheck="false" placeholder="rtsp://логин:пароль@31.148.246.249:4259/stream">
-      <span class="hint">Вставьте ровно в том виде, в каком она работает в VLC:
-        спецсимволы логина и пароля (<code>!</code>, <code>@</code>, <code>#</code>,
-        <code>/</code>, <code>%</code>) сервис перекодирует сам. Нельзя только пробелы
-        и кавычки. Ссылка хранится в зашифрованном виде и зрителям не показывается.</span>
+             spellcheck="false" value="{{ form.rtsp_url if form else '' }}"
+             placeholder="rtsp://логин:пароль@31.148.246.249:4259/stream">
     </div>
 
     <div class="field">
@@ -78,9 +73,8 @@
           <option value="transcode" {% if form and form.profile == 'transcode' %}selected{% endif %}>
             Перекодировать в H.264/Opus</option>
         </select>
-        <span class="hint">Перекодирование нужно, если камера отдаёт H.265, звук в AAC
-          или если медиа-сервер не может забрать поток напрямую. Оно занимает примерно
-          одно ядро CPU на камеру. Кнопка «Проверить» ниже скажет, нужно ли оно.</span>
+        <span class="hint">Нужно, если камера отдаёт H.265, звук в AAC или если поток
+          не удаётся забрать напрямую. Кнопка «Проверить» ниже скажет, нужно ли оно.</span>
       </div>
     </fieldset>
 

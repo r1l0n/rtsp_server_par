@@ -99,16 +99,24 @@ async def camera_new_form(request: Request, user: CurrentUser) -> HTMLResponse:
 
 
 def _camera_form_values(
-    name: str, description: str, on_demand: str, audio_enabled: str, profile: str
+    name: str, description: str, on_demand: str, audio_enabled: str, profile: str,
+    rtsp_url: str = "",
 ) -> dict[str, object]:
-    """Значения формы для повторного показа. Сам URL не возвращаем никогда:
-    в HTML он утёк бы вместе с паролем в кэш браузера и в историю."""
+    """Значения формы для повторного показа — вместе со ссылкой.
+
+    Ссылка содержит пароль камеры, и раньше её намеренно не возвращали. Цена
+    оказалась выше пользы: после каждой проверки оператор вставлял адрес
+    заново. Ответы панели отдаются с `Cache-Control: no-store` (см.
+    middleware), соединение — только TLS, а страницу видит тот же
+    авторизованный человек, который эту ссылку и ввёл секунду назад.
+    """
     return {
         "name": name,
         "description": description,
         "on_demand": on_demand == "on",
         "audio_enabled": audio_enabled == "on",
         "profile": profile,
+        "rtsp_url": rtsp_url,
     }
 
 
@@ -132,7 +140,9 @@ async def camera_preview(
     смысл кнопки в том, чтобы не заводить запись ради проверки и не удалять
     её потом. Шаги с MediaMTX пропускаются: пути ещё нет и быть не должно.
     """
-    form = _camera_form_values(name, description, on_demand, audio_enabled, profile)
+    form = _camera_form_values(
+        name, description, on_demand, audio_enabled, profile, rtsp_url
+    )
 
     try:
         target = await validate_rtsp_url(rtsp_url)
@@ -201,7 +211,9 @@ async def camera_create(
         return render(
             request, "camera_form.html", status_code=400, user=user, camera=None,
             error="Укажите название камеры",
-            form=_camera_form_values(name, description, on_demand, audio_enabled, profile),
+            form=_camera_form_values(
+                name, description, on_demand, audio_enabled, profile, rtsp_url
+            ),
         )
 
     try:
@@ -210,7 +222,9 @@ async def camera_create(
         return render(
             request, "camera_form.html", status_code=400, user=user, camera=None,
             error=str(exc),
-            form=_camera_form_values(name, description, on_demand, audio_enabled, profile),
+            form=_camera_form_values(
+                name, description, on_demand, audio_enabled, profile, rtsp_url
+            ),
         )
 
     camera = Camera(

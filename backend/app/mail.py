@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import html
 import smtplib
 import socket
 import ssl
@@ -177,6 +178,105 @@ def build_message(
     if html_body is not None:
         message.add_alternative(html_body, subtype="html")
     return message
+
+
+#: Разметка письма — таблицами и с инлайновыми стилями.
+#:
+#: Это не небрежность, а требование среды: Outlook рисует письма движком Word,
+#: который не знает ни flex, ни grid, а Gmail вырезает <style> из <head>.
+#: Всё, что сложнее таблицы с inline-style, ломается у половины получателей —
+#: и увидит это не разработчик, а сотрудник, которого позвали в сервис.
+_BG = "#0e0f11"
+_CARD = "#1b1d21"
+_TEXT = "#f2f3f5"
+_MUTED = "#a0a4ab"
+_ACCENT = "#e11b22"
+_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
+
+def wrap_html(
+    *,
+    greeting: str,
+    lead: str,
+    button_label: str,
+    url: str,
+    fine_print: str,
+    footer: str,
+) -> str:
+    """Общая оболочка письма: логотип, заголовок, абзац, кнопка, подпись.
+
+    Одна на все письма сервиса — приглашение и восстановление пароля должны
+    выглядеть одинаково, иначе второе читается как подделка первого.
+    """
+    safe_url = html.escape(url, quote=True)
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="supported-color-schemes" content="dark light">
+<title>Приглашение</title>
+</head>
+<body style="margin:0;padding:0;background:{_BG};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="background:{_BG};padding:40px 16px;">
+  <tr>
+    <td align="center">
+      <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0"
+             style="width:100%;max-width:560px;background:{_CARD};border-radius:16px;">
+        <tr>
+          <td align="center" style="padding:44px 40px 40px;font-family:{_FONT};">
+
+            <div style="font-size:22px;font-weight:700;letter-spacing:0.18em;
+                        color:{_ACCENT};padding-bottom:28px;">RTSP</div>
+
+            <h1 style="margin:0 0 18px;font-size:24px;line-height:1.3;font-weight:600;
+                       color:{_TEXT};">{html.escape(greeting)}</h1>
+
+            <p style="margin:0 0 32px;font-size:15px;line-height:1.6;color:{_MUTED};">
+              {lead}
+            </p>
+
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0"
+                   align="center" style="margin:0 auto 32px;">
+              <tr>
+                <td align="center" bgcolor="{_ACCENT}" style="border-radius:10px;">
+                  <a href="{safe_url}"
+                     style="display:inline-block;padding:15px 40px;font-family:{_FONT};
+                            font-size:16px;font-weight:600;color:#ffffff;
+                            text-decoration:none;border-radius:10px;">{html.escape(button_label)}</a>
+                </td>
+              </tr>
+            </table>
+
+            <p style="margin:0 0 10px;font-size:13px;line-height:1.6;color:{_MUTED};">
+              {fine_print}
+            </p>
+            <p style="margin:0;font-size:13px;line-height:1.6;word-break:break-all;">
+              <a href="{safe_url}" style="color:{_ACCENT};">{html.escape(url)}</a>
+            </p>
+
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 40px;">
+            <div style="height:1px;background:#2a2d31;"></div>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding:24px 40px 32px;font-family:{_FONT};
+                                    font-size:12px;line-height:1.6;color:#7c8087;">
+            {footer}
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>"""
+
 
 
 # ─── Соединение ──────────────────────────────────────────────────────────────

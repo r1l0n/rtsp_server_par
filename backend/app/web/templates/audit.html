@@ -5,12 +5,16 @@
 <div class="page-head">
   <div>
     <h1>Журнал событий</h1>
-    <div class="subtitle">Все действия в шлюзе: входы, камеры, ссылки, отказы доступа</div>
+    <div class="subtitle">Все действия в сервисе. Время местное, {{ timezone_label() }}</div>
   </div>
   <form method="get" action="/admin/audit" class="actions">
-    <input type="text" name="action" value="{{ action }}" placeholder="login.failed, link.viewed…"
-           aria-label="Фильтр по действию" class="filter-input">
-    <button type="submit" class="btn btn-secondary">Фильтровать</button>
+    <select name="action" aria-label="Фильтр по действию" class="filter-input">
+      <option value="">Все действия</option>
+      {% for code, label in audit_action_labels.items() %}
+      <option value="{{ code }}" {% if action == code %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-secondary">Показать</button>
     {% if action %}<a class="btn btn-quiet" href="/admin/audit">Сбросить</a>{% endif %}
   </form>
 </div>
@@ -24,8 +28,9 @@
     <tbody>
       {% for e in entries %}
       <tr>
-        <td class="muted small nowrap">{{ e.created_at.strftime('%d.%m.%Y %H:%M:%S') }}</td>
-        <td><span class="tag tag-neutral">{{ e.action }}</span></td>
+        <td class="muted small nowrap">{{ e.created_at|dt('%d.%m.%Y %H:%M:%S') }}</td>
+        <td><span class="tag tag-neutral" title="{{ e.action }}">
+          {{ audit_action_labels.get(e.action, e.action) }}</span></td>
         <td class="small">{{ actors.get(e.actor_id) or e.actor_label or '—' }}</td>
         <td class="muted small">{{ e.ip }}</td>
         <td class="muted small">{{ e.target_type }}{% if e.target_id %} {{ e.target_id[:8] }}{% endif %}</td>

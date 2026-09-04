@@ -38,7 +38,10 @@ def test_no_inline_event_handlers(name: str) -> None:
 #: Страницы, которые открываются без сессии: CSRF-токену там взяться неоткуда.
 #: Вход защищён от «login CSRF» атрибутом SameSite=Lax на cookie сессии,
 #: а приглашение — тем, что его адрес сам по себе одноразовый секрет.
-ANONYMOUS_PAGES = frozenset({"login.html", "link_password.html", "invite_accept.html"})
+ANONYMOUS_PAGES = frozenset(
+    {"login.html", "link_password.html", "invite_accept.html",
+     "forgot.html", "reset_password.html"}
+)
 
 
 @pytest.mark.parametrize("name", [n for n in TEMPLATE_FILES if n not in ANONYMOUS_PAGES])
@@ -262,3 +265,40 @@ def test_invite_page_posts_back_to_its_own_token() -> None:
     assert 'name="confirm_password"' in html
     # Адрес задан приглашением — поле только для показа.
     assert "readonly" in html
+
+
+# ─── Время и названия действий ───────────────────────────────────────────────
+def test_time_is_shown_in_the_configured_zone_not_utc() -> None:
+    """В базе всё в UTC, человеку показываем местное.
+
+    Ошибка здесь тихая: журнал выглядит правдоподобно, просто события в нём
+    на несколько часов «не тогда», и это замечают, сверяя с чужими часами.
+    """
+    from app.web.templating import format_datetime
+
+    moment = dt.datetime(2026, 9, 4, 9, 40, 39, tzinfo=dt.UTC)
+    assert format_datetime(moment, "%d.%m.%Y %H:%M") == "04.09.2026 14:40"
+
+
+def test_naive_datetime_is_treated_as_utc() -> None:
+    from app.web.templating import format_datetime
+
+    assert format_datetime(dt.datetime(2026, 9, 4, 9, 0)) == "04.09.2026 14:00"
+
+
+def test_timezone_label_shows_the_offset() -> None:
+    from app.web.templating import timezone_label
+
+    assert timezone_label() == "UTC+5"
+
+
+def test_every_audit_action_has_a_russian_name() -> None:
+    """Журнал читают люди. Событие без перевода покажется как код."""
+    from app import audit
+    from app.web.templating import AUDIT_ACTION_LABELS
+
+    codes = {
+        value for name, value in vars(audit).items()
+        if name.isupper() and isinstance(value, str) and "." in value
+    }
+    assert not codes - set(AUDIT_ACTION_LABELS), "нет русского названия"

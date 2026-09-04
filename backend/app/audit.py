@@ -25,6 +25,10 @@ TOTP_FAILED = "totp.failed"
 TOTP_RECOVERY_USED = "totp.recovery_used"
 PASSWORD_CHANGED = "password.changed"  # noqa: S105 — это имя события, а не пароль
 SESSION_REVOKED = "session.revoked"
+#: Запрос восстановления пишем всегда — и когда адрес неизвестен: перебор
+#: адресов через эту форму должен быть виден.
+PASSWORD_RESET_REQUESTED = "password.reset_requested"  # noqa: S105 — имя события
+PASSWORD_RESET_DONE = "password.reset_done"  # noqa: S105 — имя события
 
 USER_CREATED = "user.created"
 USER_UPDATED = "user.updated"

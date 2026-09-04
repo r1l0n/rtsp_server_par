@@ -61,6 +61,16 @@ def test_unknown_theme_cookie_falls_back_to_dark(client: TestClient) -> None:
     assert 'data-theme="dark"' in response.text
 
 
+def test_forgot_page_is_open_to_anonymous(client: TestClient) -> None:
+    response = client.get("/forgot")
+    assert response.status_code == 200
+    assert 'name="email"' in response.text
+
+
+def test_login_page_offers_password_recovery(client: TestClient) -> None:
+    assert 'href="/forgot"' in client.get("/login").text
+
+
 def test_invalid_session_cookie_is_not_fatal(client: TestClient) -> None:
     response = client.get("/", cookies={SESSION_COOKIE: "garbage-value"}, follow_redirects=False)
     assert response.status_code == 303

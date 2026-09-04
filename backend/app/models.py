@@ -193,6 +193,38 @@ class Invitation(Base):
         return self.expires_at <= (now or dt.datetime.now(dt.UTC))
 
 
+class PasswordReset(Base):
+    """Одноразовая ссылка «забыл пароль».
+
+    Живёт отдельно от приглашения: там учётной записи ещё нет, здесь она есть
+    и её нельзя ни создать, ни поменять ей роль — только задать новый пароль.
+    Срок короткий: письмо в чужом почтовом ящике не должно оставаться ключом
+    от учётной записи неделями.
+    """
+
+    __tablename__ = "password_resets"
+
+    id: Mapped[uuid.UUID] = _pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    #: SHA-256 от токена из письма. Сам токен не хранится.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+    expires_at: Mapped[dt.datetime] = mapped_column(TS)
+    used_at: Mapped[dt.datetime | None] = mapped_column(TS, default=None)
+    #: С какого адреса запросили — на случай разбора «кто это сделал».
+    requested_ip: Mapped[str] = mapped_column(String(45), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(TS, server_default=func.now())
+
+    @property
+    def is_pending(self) -> bool:
+        return self.used_at is None
+
+    def is_expired(self, now: dt.datetime | None = None) -> bool:
+        return self.expires_at <= (now or dt.datetime.now(dt.UTC))
+
+
 class RecoveryCode(Base):
     """Одноразовый код восстановления на случай потери TOTP-устройства."""
 

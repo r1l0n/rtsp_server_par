@@ -26,6 +26,10 @@ LOGIN_BY_IP = Limit(limit=20, window=300)
 LOGIN_BY_ACCOUNT = Limit(limit=10, window=900)
 #: Второй фактор перебирается быстрее — 6 цифр, поэтому окно жёстче.
 TOTP_BY_SESSION = Limit(limit=6, window=300)
+#: «Забыл пароль»: форма открыта всем, поэтому лимит и по адресу отправителя
+#: запроса, и по названному ящику — иначе ею завалят чужую почту.
+RESET_BY_IP = Limit(limit=5, window=900)
+RESET_BY_ACCOUNT = Limit(limit=3, window=900)
 #: Открытие публичной ссылки: защита от перебора slug/токена.
 PUBLIC_VIEW_BY_IP = Limit(limit=120, window=60)
 #: Ввод пароля к защищённой ссылке.

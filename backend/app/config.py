@@ -51,6 +51,9 @@ class Settings(BaseSettings):
 
     # --- Поведение -----------------------------------------------------------
     log_level: str = "INFO"
+    #: Часовой пояс, в котором панель показывает время. В логах и в базе всё
+    #: остаётся в UTC — переводится только то, что читает человек.
+    display_timezone: str = "Asia/Yekaterinburg"
     session_cookie_secure: bool = True
     session_ttl_minutes: int = 720
     default_link_ttl_hours: int = 24

@@ -143,7 +143,7 @@
     </div>
     {% if row and row.last_success_at %}
     <p class="hint">Последнее успешно отправленное письмо:
-       {{ row.last_success_at.strftime('%d.%m.%Y %H:%M') }} UTC.</p>
+       {{ row.last_success_at|dt }}.</p>
     {% endif %}
   </div>
 </section>

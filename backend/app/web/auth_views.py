@@ -10,14 +10,21 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import select
 
-from .. import audit
+from .. import audit, mail, recovery
 from ..auth import ratelimit, sessions
 from ..auth.deps import CsrfProtected, DbSession, SessionDep
-from ..auth.passwords import hash_password, needs_rehash, verify_password
+from ..auth.passwords import (
+    WeakPasswordError,
+    hash_password,
+    needs_rehash,
+    validate_password_policy,
+    verify_password,
+)
 from ..auth.totp import verify_code, verify_recovery_code
 from ..config import get_settings
 from ..crypto import get_cipher
 from ..logging_setup import get_logger
+from ..mail import MailError
 from ..middleware import client_ip
 from ..models import RecoveryCode, Role, User
 from .templating import (
@@ -245,6 +252,118 @@ async def _try_recovery_code(db: DbSession, user: User, code: str) -> tuple[bool
             candidate.used_at = dt.datetime.now(dt.UTC)
             return True, True
     return False, False
+
+
+# ─── Забыл пароль ────────────────────────────────────────────────────────────
+#: Один и тот же ответ на любой введённый адрес. Иначе форма превращается
+#: в справочник: «письмо отправлено» против «нет такого» выдаёт, кто работает
+#: в компании, а перебором — весь список сотрудников.
+RESET_SENT = (
+    "Если такая учётная запись существует, письмо со ссылкой уже отправлено. "
+    "Проверьте почту, в том числе папку «Спам»."
+)
+
+
+@router.get("/forgot", response_class=HTMLResponse)
+async def forgot_form(request: Request) -> HTMLResponse:
+    return render(request, "forgot.html")
+
+
+@router.post("/forgot", response_class=HTMLResponse)
+async def forgot_submit(
+    request: Request, db: DbSession, email: Annotated[str, Form()] = ""
+) -> HTMLResponse:
+    ip = client_ip(request)
+    email = email.strip().lower()
+
+    by_ip = await ratelimit.hit("reset_ip", ip, ratelimit.RESET_BY_IP)
+    by_account = await ratelimit.hit("reset_acct", email, ratelimit.RESET_BY_ACCOUNT)
+    if not by_ip.allowed or not by_account.allowed:
+        # И здесь ответ прежний: «слишком часто» на чужой адрес тоже сообщало бы,
+        # что адрес существует.
+        return render(request, "forgot.html", done=True, message=RESET_SENT)
+
+    user = await recovery.user_by_email(db, email)
+    await audit.record(
+        db, audit.PASSWORD_RESET_REQUESTED,
+        actor_id=user.id if user else None, actor_label=email, ip=ip,
+        meta={"known": user is not None},
+    )
+
+    if user is not None:
+        token = await recovery.create(db, user, ip=ip)
+        await db.commit()
+        try:
+            await recovery.send_email(user, token, await mail.load_config(db))
+        except MailError as exc:
+            # Ссылку показать нельзя даже администратору: её запросил кто угодно
+            # с формы входа. Пишем в журнал сервиса и молчим в интерфейсе.
+            log.error("reset_mail_failed", email=email, error=str(exc))
+    else:
+        await db.commit()
+
+    return render(request, "forgot.html", done=True, message=RESET_SENT)
+
+
+@router.get("/reset/{token}", response_class=HTMLResponse)
+async def reset_form(request: Request, db: DbSession, token: str) -> HTMLResponse:
+    found = await recovery.resolve(db, token)
+    if found is None:
+        return render(
+            request, "error.html", status_code=404,
+            message="Ссылка недействительна или срок её действия истёк. "
+                    "Запросите восстановление пароля заново.",
+        )
+    _, user = found
+    return render(request, "reset_password.html", token=token, email=user.email)
+
+
+@router.post("/reset/{token}")
+async def reset_submit(
+    request: Request,
+    db: DbSession,
+    token: str,
+    password: Annotated[str, Form()],
+    confirm_password: Annotated[str, Form()],
+) -> Response:
+    found = await recovery.resolve(db, token)
+    if found is None:
+        return render(
+            request, "error.html", status_code=404,
+            message="Ссылка недействительна или срок её действия истёк. "
+                    "Запросите восстановление пароля заново.",
+        )
+    row, user = found
+
+    def fail(message: str) -> HTMLResponse:
+        return render(
+            request, "reset_password.html", status_code=400,
+            token=token, email=user.email, error=message,
+        )
+
+    if password != confirm_password:
+        return fail("Пароль и подтверждение не совпадают.")
+    try:
+        validate_password_policy(password, email=user.email)
+    except WeakPasswordError as exc:
+        return fail(str(exc))
+
+    user.password_hash = hash_password(password)
+    user.must_change_password = False
+    user.failed_attempts = 0
+    user.locked_until = None
+    row.used_at = dt.datetime.now(dt.UTC)
+
+    await audit.record(
+        db, audit.PASSWORD_RESET_DONE, actor_id=user.id, actor_label=user.email,
+        ip=client_ip(request),
+    )
+    await db.commit()
+
+    # Смена пароля обрывает все сеансы: если в учётную запись уже зашли чужие,
+    # восстановление пароля должно их выкинуть.
+    await sessions.delete_all_for_user(user.id)
+    return redirect("/login?notice=password_reset")
 
 
 # ─── Выход ───────────────────────────────────────────────────────────────────

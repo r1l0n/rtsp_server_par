@@ -81,7 +81,7 @@
           </div>
           <div>
             <dt>Проверено</dt>
-            <dd>{{ camera.probed_at.strftime('%d.%m.%Y %H:%M') if camera.probed_at else '—' }}</dd>
+            <dd>{{ camera.probed_at|dt }}</dd>
           </div>
         </dl>
         <p class="hint">
@@ -227,7 +227,7 @@
           </button>
         </div>
         <div class="muted small">
-          {{ link.expires_at.strftime('до %d.%m.%Y %H:%M') if link.expires_at else 'бессрочно' }}
+          {{ link.expires_at|dt('до %d.%m.%Y %H:%M') if link.expires_at else 'бессрочно' }}
           · {{ link.view_count }} просмотров
           {%- if link.password_hash %} · пароль{% endif %}
           {%- if link.allowed_cidrs %} · IP-фильтр{% endif %}
