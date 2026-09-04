@@ -11,42 +11,62 @@
  * панель выглядит ровно как макет; если нет — берётся системный гротеск.
  */
 
+/* ── Палитра ───────────────────────────────────────────────────────────────
+   Тёмная тема повторяет оформление PARITET DESK: почти чёрное меню, чуть
+   светлее полотно, карточки с тонким контуром и фирменный красный на главном
+   действии. Серые взяты нейтральные, без синевы, — иначе рядом с чёрным
+   меню они отдают в фиолетовый.
+
+   Красный тут и бренд, и цвет опасности. Чтобы «Подключиться» и «Удалить»
+   не выглядели одинаково, роли разведены формой и оттенком: главное действие
+   — залитая кнопка фирменного красного, разрушительное — контурная кнопка
+   более светлого сигнального. */
 :root {
   color-scheme: dark;
-  --bg: #161826;
-  --surface: #232532;
-  --text: #e9e9ed;
-  --accent: #9184d9;
-  --divider: color-mix(in srgb, #e9e9ed 16%, transparent);
 
-  --neutral-100: #f3f5fe;
-  --neutral-200: #e4e7f5;
-  --neutral-300: #cfd3e5;
-  --neutral-400: #b2b6ca;
-  --neutral-500: #9397ab;
-  --neutral-600: #75798c;
-  --neutral-700: #595d6c;
-  --neutral-800: #3f424d;
-  --neutral-900: #292b31;
+  /* Меню темнее полотна — как в макете. */
+  --sidebar: #08090a;
+  --bg: #121316;
+  --surface: #1b1d21;
+  --text: #f2f3f5;
+  --accent: #e11b22;
+  --divider: color-mix(in srgb, #f2f3f5 14%, transparent);
+  /* Затемнение под модальным окном. Отдельный токен: в светлой теме оно
+     обязано остаться тёмным, а через шкалу neutral получилось бы белым. */
+  --overlay: rgba(6, 7, 8, 0.72);
 
-  --accent-100: #f5f4ff;
-  --accent-200: #e7e5fe;
-  --accent-300: #d2cefd;
-  --accent-400: #b5abfc;
-  --accent-500: #968ae0;
-  --accent-600: #796cbf;
-  --accent-700: #5d5294;
-  --accent-800: #423a6a;
-  --accent-900: #2b2741;
+  --neutral-100: #f5f6f7;
+  --neutral-200: #e3e5e8;
+  --neutral-300: #c9ccd1;
+  --neutral-400: #a0a4ab;
+  --neutral-500: #7c8087;
+  --neutral-600: #5c6067;
+  --neutral-700: #3f4348;
+  --neutral-800: #2a2d31;
+  --neutral-900: #17191c;
 
-  /* Состояния потока. Взяты не из ниоткуда: «в эфире» — тот же сине-фиолетовый
-     акцент, тревога — тёплый красный, предупреждение — янтарь. */
-  --ok: #7fd1a8;
-  --warn: #e0b978;
-  --danger: #f28b82;
+  --accent-100: #fff1f1;
+  --accent-200: #ffe0e0;
+  --accent-300: #ffc2c2;
+  --accent-400: #ff9b9b;
+  --accent-500: #f2565c;
+  --accent-600: #e11b22;
+  --accent-700: #b3151b;
+  --accent-800: #7a0f14;
+  --accent-900: #45090c;
 
-  --muted: color-mix(in srgb, var(--text) 55%, transparent);
-  --faint: color-mix(in srgb, var(--text) 38%, transparent);
+  /* «В эфире» — бирюзовый индикатор готовности из макета; тревога заметно
+     светлее фирменного красного, чтобы не сливаться с кнопкой действия. */
+  --ok: #16c79a;
+  --warn: #e0a458;
+  --danger: #ff6259;
+
+  --muted: color-mix(in srgb, var(--text) 58%, transparent);
+  --faint: color-mix(in srgb, var(--text) 40%, transparent);
+  /* Ссылки нейтральные. Фирменный красный оставлен бренду, главной кнопке
+     и отметке текущего раздела — иначе интерфейс выглядит так, будто всё
+     на экране требует немедленного вмешательства. */
+  --link: #c9ccd1;
 
   --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
@@ -63,96 +83,105 @@
   --radius-md: 8px;
   --radius-lg: 14px;
 
-  /* Тени на тёмном фоне работают краем, а не размытием: контур из neutral
-     отделяет карточку от фона там, где размытая тень не видна вовсе. */
-  --shadow-sm: 0 0 0 1px #3f424d;
-  --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0, 0, 0, 0.55);
-  --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0, 0, 0, 0.65);
+  /* Тени на тёмном фоне работают краем, а не размытием: контур отделяет
+     карточку от фона там, где размытая тень не видна вовсе. */
+  --shadow-sm: 0 0 0 1px #2a2d31;
+  --shadow-md: 0 0 0 1px #3f4348, 0 6px 18px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 0 0 1px #5c6067, 0 16px 40px rgba(0, 0, 0, 0.65);
 }
 
 /* ── Светлая тема ──────────────────────────────────────────────────────────
+   Тёплый серый, а не белизна: панель смотрят помногу часов, и лист бумаги
+   во весь экран выжигает глаза не хуже, чем светлый фон вокруг чёрного
+   кадра. Полотно приглушено, карточки чуть светлее его, и только они.
+
    Шкалы neutral и accent переворачиваются целиком: их смысл — «от самого
-   светлого к самому тёмному», и на белом фоне роли меняются местами. Так
-   правила вроде `color: var(--neutral-400)` остаются читаемыми в обеих темах,
-   и ни одного цвета не приходится подбирать заново по месту.
+   светлого к самому тёмному», и на светлом фоне роли меняются местами. Так
+   правила вроде `color: var(--neutral-400)` остаются читаемыми в обеих темах.
 
    Блок продублирован для выбора «как в системе»: сервер не знает настройку
    ОС, за него отвечает медиазапрос. */
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg: #f4f5fa;
-  --surface: #ffffff;
-  --text: #1b1d29;
-  --accent: #6a5cc7;
-  --divider: color-mix(in srgb, #1b1d29 14%, transparent);
+  --sidebar: #e6e8ec;
+  --bg: #eceef1;
+  --surface: #f7f8fa;
+  --text: #1a1c1f;
+  --accent: #c8151c;
+  --divider: color-mix(in srgb, #1a1c1f 16%, transparent);
+  --overlay: rgba(20, 22, 25, 0.55);
 
-  --neutral-100: #292b31;
-  --neutral-200: #3f424d;
-  --neutral-300: #595d6c;
-  --neutral-400: #75798c;
-  --neutral-500: #9397ab;
-  --neutral-600: #b2b6ca;
-  --neutral-700: #cfd3e5;
-  --neutral-800: #e4e7f5;
-  --neutral-900: #f3f5fe;
+  --neutral-100: #17191c;
+  --neutral-200: #2a2d31;
+  --neutral-300: #3f4348;
+  --neutral-400: #5c6067;
+  --neutral-500: #7c8087;
+  --neutral-600: #a0a4ab;
+  --neutral-700: #c9ccd1;
+  --neutral-800: #e3e5e8;
+  --neutral-900: #f5f6f7;
 
-  --accent-100: #2b2741;
-  --accent-200: #423a6a;
-  --accent-300: #5d5294;
-  --accent-400: #796cbf;
-  --accent-500: #968ae0;
-  --accent-600: #b5abfc;
-  --accent-700: #d2cefd;
-  --accent-800: #e7e5fe;
-  --accent-900: #f5f4ff;
+  --accent-100: #45090c;
+  --accent-200: #7a0f14;
+  --accent-300: #b3151b;
+  --accent-400: #a01217;
+  --accent-500: #e11b22;
+  --accent-600: #f2565c;
+  --accent-700: #ff9b9b;
+  --accent-800: #ffe0e0;
+  --accent-900: #fff1f1;
 
-  --ok: #2f8f63;
-  --warn: #a0701a;
-  --danger: #c4453c;
+  --ok: #0f8f6f;
+  --warn: #976414;
+  --danger: #c4302a;
+  --link: #3f4348;
 
-  --shadow-sm: 0 0 0 1px rgba(27, 29, 41, 0.10);
-  --shadow-md: 0 0 0 1px rgba(27, 29, 41, 0.08), 0 6px 18px rgba(27, 29, 41, 0.10);
-  --shadow-lg: 0 0 0 1px rgba(27, 29, 41, 0.10), 0 16px 40px rgba(27, 29, 41, 0.18);
+  --shadow-sm: 0 0 0 1px rgba(26, 28, 31, 0.12);
+  --shadow-md: 0 0 0 1px rgba(26, 28, 31, 0.10), 0 6px 18px rgba(26, 28, 31, 0.10);
+  --shadow-lg: 0 0 0 1px rgba(26, 28, 31, 0.12), 0 16px 40px rgba(26, 28, 31, 0.18);
 }
 
 @media (prefers-color-scheme: light) {
   :root[data-theme="auto"] {
     color-scheme: light;
 
-    --bg: #f4f5fa;
-    --surface: #ffffff;
-    --text: #1b1d29;
-    --accent: #6a5cc7;
-    --divider: color-mix(in srgb, #1b1d29 14%, transparent);
+    --sidebar: #e6e8ec;
+    --bg: #eceef1;
+    --surface: #f7f8fa;
+    --text: #1a1c1f;
+    --accent: #c8151c;
+    --divider: color-mix(in srgb, #1a1c1f 16%, transparent);
+    --overlay: rgba(20, 22, 25, 0.55);
 
-    --neutral-100: #292b31;
-    --neutral-200: #3f424d;
-    --neutral-300: #595d6c;
-    --neutral-400: #75798c;
-    --neutral-500: #9397ab;
-    --neutral-600: #b2b6ca;
-    --neutral-700: #cfd3e5;
-    --neutral-800: #e4e7f5;
-    --neutral-900: #f3f5fe;
+    --neutral-100: #17191c;
+    --neutral-200: #2a2d31;
+    --neutral-300: #3f4348;
+    --neutral-400: #5c6067;
+    --neutral-500: #7c8087;
+    --neutral-600: #a0a4ab;
+    --neutral-700: #c9ccd1;
+    --neutral-800: #e3e5e8;
+    --neutral-900: #f5f6f7;
 
-    --accent-100: #2b2741;
-    --accent-200: #423a6a;
-    --accent-300: #5d5294;
-    --accent-400: #796cbf;
-    --accent-500: #968ae0;
-    --accent-600: #b5abfc;
-    --accent-700: #d2cefd;
-    --accent-800: #e7e5fe;
-    --accent-900: #f5f4ff;
+    --accent-100: #45090c;
+    --accent-200: #7a0f14;
+    --accent-300: #b3151b;
+    --accent-400: #a01217;
+    --accent-500: #e11b22;
+    --accent-600: #f2565c;
+    --accent-700: #ff9b9b;
+    --accent-800: #ffe0e0;
+    --accent-900: #fff1f1;
 
-    --ok: #2f8f63;
-    --warn: #a0701a;
-    --danger: #c4453c;
+    --ok: #0f8f6f;
+    --warn: #976414;
+    --danger: #c4302a;
+    --link: #3f4348;
 
-    --shadow-sm: 0 0 0 1px rgba(27, 29, 41, 0.10);
-    --shadow-md: 0 0 0 1px rgba(27, 29, 41, 0.08), 0 6px 18px rgba(27, 29, 41, 0.10);
-    --shadow-lg: 0 0 0 1px rgba(27, 29, 41, 0.10), 0 16px 40px rgba(27, 29, 41, 0.18);
+    --shadow-sm: 0 0 0 1px rgba(26, 28, 31, 0.12);
+    --shadow-md: 0 0 0 1px rgba(26, 28, 31, 0.10), 0 6px 18px rgba(26, 28, 31, 0.10);
+    --shadow-lg: 0 0 0 1px rgba(26, 28, 31, 0.12), 0 16px 40px rgba(26, 28, 31, 0.18);
   }
 }
 
@@ -181,8 +210,8 @@ h3 { font-size: 16px; }
 p { margin: 0 0 var(--space-3); }
 p:last-child { margin-bottom: 0; }
 
-a { color: var(--accent); text-underline-offset: 3px; }
-a:hover { color: var(--accent-400); }
+a { color: var(--link); text-underline-offset: 3px; }
+a:hover { color: var(--text); }
 
 code {
   font-family: var(--mono);
@@ -238,7 +267,7 @@ code {
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-4) var(--space-3);
-  background: var(--surface);
+  background: var(--sidebar);
   border-right: 1px solid var(--divider);
 }
 
@@ -280,8 +309,9 @@ code {
 .nav-item .i { flex: none; width: 18px; height: 18px; color: var(--neutral-400); }
 .nav-item:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
 .nav-item[aria-current="page"] {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 .nav-item[aria-current="page"] .i { color: var(--accent); }
 
@@ -489,7 +519,7 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tile-name:hover { color: var(--accent); }
+.tile-name:hover { color: var(--link); }
 .tile-foot {
   display: flex;
   align-items: center;
@@ -577,14 +607,21 @@ code {
   white-space: nowrap;
 }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary { color: var(--accent); border-color: var(--accent); }
-.btn-primary:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.btn-primary:active { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+/* Залитая, а не контурная: на странице всегда ровно одно главное действие,
+   и оно должно читаться раньше остального текста. */
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  font-weight: 500;
+}
+.btn-primary:hover { background: var(--accent-700); border-color: var(--accent-700); }
+.btn-primary:active { background: var(--accent-800); border-color: var(--accent-800); }
 .btn-secondary { border-color: var(--divider); }
 .btn-secondary:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
 .btn-secondary:active { background: color-mix(in srgb, var(--text) 14%, transparent); }
-.btn-ghost { color: var(--accent); padding-inline: var(--space-1); font-size: 13px; }
-.btn-ghost:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.btn-ghost { color: var(--link); padding-inline: var(--space-1); font-size: 13px; }
+.btn-ghost:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 .btn-quiet { color: var(--neutral-400); }
 .btn-quiet:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
 .btn-danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
@@ -861,7 +898,7 @@ textarea.copyfield { width: 100%; }
   display: grid;
   place-items: center;
   padding: var(--space-4);
-  background: color-mix(in srgb, var(--neutral-900) 62%, transparent);
+  background: var(--overlay);
 }
 .dialog {
   width: min(880px, 100%);
@@ -911,7 +948,7 @@ textarea.copyfield { width: 100%; }
   cursor: pointer;
 }
 .tab:hover { color: var(--text); }
-.tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab.is-active { color: var(--text); border-bottom-color: var(--accent); }
 .tab-panel { display: flex; flex-direction: column; gap: var(--space-2); }
 .dialog .page-head { margin-bottom: 0; }
 
@@ -1004,10 +1041,10 @@ textarea.copyfield { width: 100%; }
 .theme-swatch-bar { display: block; height: 16px; }
 .theme-swatch-body { display: block; height: 100%; }
 
-.theme-swatch-dark .theme-swatch-bar { background: #232532; }
-.theme-swatch-dark .theme-swatch-body { background: #161826; }
-.theme-swatch-light .theme-swatch-bar { background: #ffffff; }
-.theme-swatch-light .theme-swatch-body { background: #f4f5fa; }
+.theme-swatch-dark .theme-swatch-bar { background: #08090a; }
+.theme-swatch-dark .theme-swatch-body { background: #121316; }
+.theme-swatch-light .theme-swatch-bar { background: #e6e8ec; }
+.theme-swatch-light .theme-swatch-body { background: #eceef1; }
 /* «Как в системе» — половина одной темы, половина другой. */
-.theme-swatch-auto .theme-swatch-bar { background: linear-gradient(to right, #232532 50%, #ffffff 50%); }
-.theme-swatch-auto .theme-swatch-body { background: linear-gradient(to right, #161826 50%, #f4f5fa 50%); }
+.theme-swatch-auto .theme-swatch-bar { background: linear-gradient(to right, #08090a 50%, #e6e8ec 50%); }
+.theme-swatch-auto .theme-swatch-body { background: linear-gradient(to right, #121316 50%, #eceef1 50%); }

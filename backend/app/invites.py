@@ -141,11 +141,11 @@ def _render_email(invitation: Invitation, token: str, inviter: User) -> tuple[st
 #: который не знает ни flex, ни grid, а Gmail вырезает <style> из <head>.
 #: Всё, что сложнее таблицы с inline-style, ломается у половины получателей —
 #: и увидит это не разработчик, а сотрудник, которого позвали в сервис.
-_BG = "#161826"
-_CARD = "#232532"
-_TEXT = "#e9e9ed"
-_MUTED = "#9397ab"
-_ACCENT = "#7d6fd1"
+_BG = "#0e0f11"
+_CARD = "#1b1d21"
+_TEXT = "#f2f3f5"
+_MUTED = "#a0a4ab"
+_ACCENT = "#e11b22"
 _FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
 
@@ -205,12 +205,12 @@ def _render_html(url: str, *, greeting: str, who: str, hours: int) -> str:
         </tr>
         <tr>
           <td style="padding:0 40px;">
-            <div style="height:1px;background:#3f424d;"></div>
+            <div style="height:1px;background:#2a2d31;"></div>
           </td>
         </tr>
         <tr>
           <td align="center" style="padding:24px 40px 32px;font-family:{_FONT};
-                                    font-size:12px;line-height:1.6;color:#75798c;">
+                                    font-size:12px;line-height:1.6;color:#7c8087;">
             Если вы не ждали этого письма — удалите его.
             Без перехода по ссылке учётная запись не создаётся.
           </td>
