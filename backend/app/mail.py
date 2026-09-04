@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import smtplib
+import socket
 import ssl
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -178,6 +179,58 @@ def build_message(
     return message
 
 
+# ─── Соединение ──────────────────────────────────────────────────────────────
+# socket.create_connection перебирает все адреса имени и, не подключившись ни
+# к одному, поднимает ошибку ПОСЛЕДНЕГО. У почтовых серверов последним обычно
+# оказывается IPv6, а на машине без IPv6 ядро отвергает его мгновенно —
+# «Network is unreachable». Настоящая причина (таймаут по IPv4, закрытый порт)
+# при этом теряется, и администратор чинит не то: сеть выглядит сломанной
+# целиком, хотя не работает ровно один маршрут.
+#
+# Поэтому адреса перебираем сами и в ошибке показываем итог по каждому.
+
+
+class SMTPUnreachable(OSError):
+    """Ни один адрес имени не отозвался. В тексте — что ответил каждый."""
+
+
+def _connect(host: str, port: int, timeout: float) -> socket.socket:
+    try:
+        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise SMTPUnreachable(f"имя {host} не разрешается: {exc}") from exc
+
+    failures: list[str] = []
+    for family, socktype, proto, _canonname, address in addresses:
+        sock = socket.socket(family, socktype, proto)
+        try:
+            sock.settimeout(timeout)
+            sock.connect(address)
+        except OSError as exc:
+            sock.close()
+            kind = "IPv6" if family == socket.AF_INET6 else "IPv4"
+            failures.append(f"{address[0]} [{kind}] — {exc.strerror or exc}")
+        else:
+            return sock
+
+    raise SMTPUnreachable("; ".join(failures) or f"у имени {host} нет адресов")
+
+
+class _SMTP(smtplib.SMTP):
+    """smtplib с нашим перебором адресов вместо create_connection."""
+
+    def _get_socket(self, host: str, port: int, timeout: float) -> socket.socket:
+        return _connect(host, port, timeout)
+
+
+class _SMTP_SSL(smtplib.SMTP_SSL, _SMTP):
+    """То же для порта 465: TLS поднимается поверх нашего сокета.
+
+    Порядок баз важен — SMTP_SSL берёт сокет через super()._get_socket,
+    и по MRO им оказывается _SMTP.
+    """
+
+
 # ─── Транспорт ───────────────────────────────────────────────────────────────
 def _send_sync(config: MailConfig, message: EmailMessage) -> None:
     """Блокирующая отправка. Вызывается только из потока (см. send)."""
@@ -185,9 +238,9 @@ def _send_sync(config: MailConfig, message: EmailMessage) -> None:
 
     client: smtplib.SMTP
     if config.security == "ssl":
-        client = smtplib.SMTP_SSL(config.host, config.port, timeout=config.timeout, context=context)
+        client = _SMTP_SSL(config.host, config.port, timeout=config.timeout, context=context)
     else:
-        client = smtplib.SMTP(config.host, config.port, timeout=config.timeout)
+        client = _SMTP(config.host, config.port, timeout=config.timeout)
 
     with client:
         client.ehlo()
@@ -231,9 +284,9 @@ async def send(
         raise MailError(f"SMTP-сервер ответил ошибкой: {exc}") from exc
     except (OSError, ssl.SSLError) as exc:
         # Недоступный хост, таймаут, битый TLS — самая частая причина отказа.
-        log.error("smtp_unreachable", host=config.host, error=str(exc))
+        log.error("smtp_unreachable", host=config.host, port=config.port, error=str(exc))
         raise MailError(
-            f"Не удалось связаться с SMTP-сервером {config.host}: {exc}"
+            f"Не удалось связаться с SMTP-сервером {config.host}:{config.port} — {exc}"
         ) from exc
 
     log.info("mail_sent", to=to, subject=subject, source=config.source)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import smtplib
+import socket
 import uuid
 from typing import ClassVar
 
@@ -302,10 +303,102 @@ class _FakeSMTP:
 
 @pytest.fixture
 def fake_smtp(monkeypatch: pytest.MonkeyPatch) -> type[_FakeSMTP]:
+    # Подменяем именно наши подклассы: они наследуют smtplib на момент
+    # импорта, и подмена самого smtplib до них уже не дошла бы — тест ушёл бы
+    # соединяться с настоящим сервером.
     _FakeSMTP.instances = []
-    monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
-    monkeypatch.setattr(smtplib, "SMTP_SSL", _FakeSMTP)
+    monkeypatch.setattr(mail, "_SMTP", _FakeSMTP)
+    monkeypatch.setattr(mail, "_SMTP_SSL", _FakeSMTP)
     return _FakeSMTP
+
+
+# ─── Перебор адресов ─────────────────────────────────────────────────────────
+def _addrinfo(*addresses: tuple[int, str]) -> list[tuple]:
+    return [
+        (family, socket.SOCK_STREAM, 6, "", (ip, 587, 0, 0) if family == socket.AF_INET6
+         else (ip, 587))
+        for family, ip in addresses
+    ]
+
+
+def test_connect_error_reports_every_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Провал по IPv4 не должен прятаться за мгновенным отказом IPv6.
+
+    Настоящий случай: у имени есть A и AAAA, IPv6 на машине нет. Ядро
+    отвергает IPv6 мгновенно, и стандартный create_connection показывает
+    именно эту ошибку — «Network is unreachable». Администратор чинит
+    маршрутизацию, хотя на деле по IPv4 просто закрыт порт.
+    """
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda *a, **kw: _addrinfo(
+            (socket.AF_INET, "77.88.21.158"), (socket.AF_INET6, "2a02:6b8::19d")
+        ),
+    )
+
+    errors = {"77.88.21.158": TimeoutError("Connection timed out"),
+              "2a02:6b8::19d": OSError(101, "Network is unreachable")}
+
+    class _Socket:
+        def __init__(self, family: int, *_: object) -> None:
+            self.family = family
+
+        def settimeout(self, _: float) -> None: ...
+        def close(self) -> None: ...
+
+        def connect(self, address: tuple) -> None:
+            raise errors[address[0]]
+
+    monkeypatch.setattr(socket, "socket", _Socket)
+
+    with pytest.raises(mail.SMTPUnreachable) as caught:
+        mail._connect("smtp.yandex.ru", 587, 5)
+
+    text = str(caught.value)
+    assert "77.88.21.158 [IPv4]" in text
+    assert "2a02:6b8::19d [IPv6]" in text
+    assert "Connection timed out" in text
+
+
+def test_connect_returns_the_first_address_that_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda *a, **kw: _addrinfo(
+            (socket.AF_INET6, "2a02:6b8::19d"), (socket.AF_INET, "77.88.21.158")
+        ),
+    )
+
+    class _Socket:
+        def __init__(self, family: int, *_: object) -> None:
+            self.family = family
+
+        def settimeout(self, _: float) -> None: ...
+        def close(self) -> None: ...
+
+        def connect(self, address: tuple) -> None:
+            if self.family == socket.AF_INET6:
+                raise OSError(101, "Network is unreachable")
+
+    monkeypatch.setattr(socket, "socket", _Socket)
+
+    assert mail._connect("smtp.yandex.ru", 587, 5).family == socket.AF_INET
+
+
+def test_unresolvable_name_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(*a: object, **kw: object) -> None:
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+    with pytest.raises(mail.SMTPUnreachable, match="не разрешается"):
+        mail._connect("smtp.opechatka.ru", 587, 5)
+
+
+def test_ssl_client_takes_its_socket_from_our_connect() -> None:
+    """MRO обязан вести SMTP_SSL к нашему _get_socket, а не к stdlib-овому."""
+    assert mail._SMTP_SSL.__mro__.index(mail._SMTP) < mail._SMTP_SSL.__mro__.index(smtplib.SMTP)
+    assert mail._SMTP._get_socket is not smtplib.SMTP._get_socket
 
 
 def _message() -> object:
