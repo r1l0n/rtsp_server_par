@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Тема — {{ app_name }}{% endblock %}
+{% block container_class %}container-narrow{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Тема</h1>
+    <div class="subtitle">Оформление панели на этом устройстве</div>
+  </div>
+</div>
+
+<section class="card">
+  <form method="post" action="/settings/theme">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <div class="theme-choices">
+      {% for value, label in themes.items() %}
+      <label class="theme-choice{% if theme == value %} is-current{% endif %}">
+        <input type="radio" name="theme" value="{{ value }}"
+               {% if theme == value %}checked{% endif %}>
+        <span class="theme-swatch theme-swatch-{{ value }}" aria-hidden="true">
+          <span class="theme-swatch-bar"></span>
+          <span class="theme-swatch-body"></span>
+        </span>
+        <span class="theme-choice-name">{{ label }}</span>
+      </label>
+      {% endfor %}
+    </div>
+
+    <p class="hint">
+      «Как в системе» следует настройке операционной системы и переключается
+      вместе с ней. Тёмная выбрана по умолчанию: панель обычно смотрят рядом
+      с видео, и светлый фон вокруг чёрного кадра слепит.
+    </p>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Применить</button>
+    </div>
+  </form>
+</section>
+
+<p class="hint">
+  Тема запоминается в этом браузере и не влияет на других пользователей.
+</p>
+{% endblock %}

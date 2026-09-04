@@ -185,7 +185,7 @@ def cmd_gen_token(_: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="app.cli", description="RTSP Gateway — служебные команды")
+    parser = argparse.ArgumentParser(prog="app.cli", description="RTSP — служебные команды")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("gen-key", help="сгенерировать ключ шифрования (base64)")

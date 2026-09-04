@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="{{ theme }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,39 +13,70 @@
 
 {% include "_icons.html" %}
 
-{% if user %}
-<header class="topbar">
-  <div class="topbar-inner">
-    <a class="brand" href="/">RTSP Gateway</a>
+{# Один каркас на все страницы: без сессии колонка с меню просто не рождается,
+   а содержимое занимает всю ширину. Так вход и приглашение не тянут за собой
+   вторую разметку. #}
+<div class="shell{% if not user %} shell-plain{% endif %}">
+
+  {% if user %}
+  {% set path = request.url.path %}
+  <aside class="sidebar">
+    <a class="brand" href="/">
+      <svg class="i" aria-hidden="true"><use href="#i-camera"></use></svg>{{ app_name }}
+    </a>
+
     <nav>
-      <a href="/" {% if request.url.path == '/' or request.url.path.startswith('/cameras') %}aria-current="page"{% endif %}>Камеры</a>
+      <a class="nav-item" href="/"
+         {% if path == '/' or path.startswith('/cameras') %}aria-current="page"{% endif %}>
+        <svg class="i" aria-hidden="true"><use href="#i-camera"></use></svg>Камеры
+      </a>
       {% if user.role == Role.admin %}
-        <a href="/admin/users" {% if request.url.path.startswith('/admin/users') %}aria-current="page"{% endif %}>Пользователи</a>
-        <a href="/admin/mail" {% if request.url.path.startswith('/admin/mail') %}aria-current="page"{% endif %}>Почта</a>
-        <a href="/admin/audit" {% if request.url.path.startswith('/admin/audit') %}aria-current="page"{% endif %}>Журнал</a>
+      <a class="nav-item" href="/admin/users"
+         {% if path.startswith('/admin/users') %}aria-current="page"{% endif %}>
+        <svg class="i" aria-hidden="true"><use href="#i-users"></use></svg>Пользователи
+      </a>
+      <a class="nav-item" href="/admin/audit"
+         {% if path.startswith('/admin/audit') %}aria-current="page"{% endif %}>
+        <svg class="i" aria-hidden="true"><use href="#i-journal"></use></svg>Журнал
+      </a>
+      {% endif %}
+
+      <div class="nav-group">Настройки</div>
+      <a class="nav-item" href="/settings/theme"
+         {% if path.startswith('/settings/theme') %}aria-current="page"{% endif %}>
+        <svg class="i" aria-hidden="true"><use href="#i-theme"></use></svg>Тема
+      </a>
+      {% if user.role == Role.admin %}
+      <a class="nav-item" href="/settings/mail"
+         {% if path.startswith('/settings/mail') %}aria-current="page"{% endif %}>
+        <svg class="i" aria-hidden="true"><use href="#i-mail"></use></svg>Почта
+      </a>
       {% endif %}
     </nav>
-    <div class="topbar-right">
+
+    <div class="sidebar-foot">
       {% set who = (user.full_name or user.email).split() %}
-      <a class="btn btn-secondary" href="/profile">
+      <a class="nav-item nav-user" href="/profile"
+         {% if path.startswith('/profile') %}aria-current="page"{% endif %}>
         <span class="avatar">{{ (who[0][0] ~ (who[1][0] if who|length > 1 else ''))|upper }}</span>
-        Профиль
+        <span class="nav-user-name">{{ user.full_name or user.email }}</span>
       </a>
-      <form method="post" action="/logout" class="inline">
+      <form method="post" action="/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="btn btn-quiet">Выйти</button>
+        <button type="submit" class="nav-item nav-logout">
+          <svg class="i" aria-hidden="true"><use href="#i-logout"></use></svg>Выйти
+        </button>
       </form>
     </div>
-  </div>
-  <div class="topbar-rule"></div>
-</header>
-{% endif %}
+  </aside>
+  {% endif %}
 
-<main class="container {% block container_class %}{% endblock %}">
-  {% if notice %}<div class="alert alert-ok">{{ notice }}</div>{% endif %}
-  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
-  {% block content %}{% endblock %}
-</main>
+  <main class="container {% block container_class %}{% endblock %}">
+    {% if notice %}<div class="alert alert-ok">{{ notice }}</div>{% endif %}
+    {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
 
 {% if user %}<script src="/static/panel.js" defer></script>{% endif %}
 {% block scripts %}{% endblock %}

@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     smtp_password: str | None = None
     #: Отправитель письма. Пусто — noreply@<DOMAIN>.
     mail_from: str = ""
-    mail_from_name: str = "RTSP Gateway"
+    mail_from_name: str = "RTSP"
     smtp_timeout_seconds: int = 15
 
     # --- Безопасность добавления камер (SSRF) --------------------------------

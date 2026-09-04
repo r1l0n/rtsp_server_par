@@ -1,8 +1,10 @@
-/* Оформление панели — тёмная тема «Nocturne» из макета.
+/* Оформление панели. Базовая тема — тёмная «Nocturne» из макета: панель
+ * смотрят рядом с видео, и светлый фон вокруг чёрного кадра слепит.
  *
- * Тема одна и намеренно тёмная: панель смотрят рядом с видео, и светлый фон
- * вокруг чёрного кадра слепит. Никаких @media (prefers-color-scheme) —
- * переключение темы дало бы второй набор значений, который некому проверять.
+ * Тему выбирает пользователь в «Настройки → Тема», выбор приезжает атрибутом
+ * data-theme на <html>. Значение «auto» отдаётся системе. Вся разница между
+ * темами — в наборе токенов ниже: правила по всему файлу написаны через
+ * переменные, поэтому вторую тему не приходится сопровождать отдельно.
  *
  * Шрифты только системные: font-src в CSP разрешает лишь 'self', а тянуть
  * Inter с чужого CDN на закрытом контуре нельзя. Если Inter в системе есть,
@@ -10,6 +12,7 @@
  */
 
 :root {
+  color-scheme: dark;
   --bg: #161826;
   --surface: #232532;
   --text: #e9e9ed;
@@ -65,6 +68,92 @@
   --shadow-sm: 0 0 0 1px #3f424d;
   --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0, 0, 0, 0.55);
   --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0, 0, 0, 0.65);
+}
+
+/* ── Светлая тема ──────────────────────────────────────────────────────────
+   Шкалы neutral и accent переворачиваются целиком: их смысл — «от самого
+   светлого к самому тёмному», и на белом фоне роли меняются местами. Так
+   правила вроде `color: var(--neutral-400)` остаются читаемыми в обеих темах,
+   и ни одного цвета не приходится подбирать заново по месту.
+
+   Блок продублирован для выбора «как в системе»: сервер не знает настройку
+   ОС, за него отвечает медиазапрос. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f4f5fa;
+  --surface: #ffffff;
+  --text: #1b1d29;
+  --accent: #6a5cc7;
+  --divider: color-mix(in srgb, #1b1d29 14%, transparent);
+
+  --neutral-100: #292b31;
+  --neutral-200: #3f424d;
+  --neutral-300: #595d6c;
+  --neutral-400: #75798c;
+  --neutral-500: #9397ab;
+  --neutral-600: #b2b6ca;
+  --neutral-700: #cfd3e5;
+  --neutral-800: #e4e7f5;
+  --neutral-900: #f3f5fe;
+
+  --accent-100: #2b2741;
+  --accent-200: #423a6a;
+  --accent-300: #5d5294;
+  --accent-400: #796cbf;
+  --accent-500: #968ae0;
+  --accent-600: #b5abfc;
+  --accent-700: #d2cefd;
+  --accent-800: #e7e5fe;
+  --accent-900: #f5f4ff;
+
+  --ok: #2f8f63;
+  --warn: #a0701a;
+  --danger: #c4453c;
+
+  --shadow-sm: 0 0 0 1px rgba(27, 29, 41, 0.10);
+  --shadow-md: 0 0 0 1px rgba(27, 29, 41, 0.08), 0 6px 18px rgba(27, 29, 41, 0.10);
+  --shadow-lg: 0 0 0 1px rgba(27, 29, 41, 0.10), 0 16px 40px rgba(27, 29, 41, 0.18);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] {
+    color-scheme: light;
+
+    --bg: #f4f5fa;
+    --surface: #ffffff;
+    --text: #1b1d29;
+    --accent: #6a5cc7;
+    --divider: color-mix(in srgb, #1b1d29 14%, transparent);
+
+    --neutral-100: #292b31;
+    --neutral-200: #3f424d;
+    --neutral-300: #595d6c;
+    --neutral-400: #75798c;
+    --neutral-500: #9397ab;
+    --neutral-600: #b2b6ca;
+    --neutral-700: #cfd3e5;
+    --neutral-800: #e4e7f5;
+    --neutral-900: #f3f5fe;
+
+    --accent-100: #2b2741;
+    --accent-200: #423a6a;
+    --accent-300: #5d5294;
+    --accent-400: #796cbf;
+    --accent-500: #968ae0;
+    --accent-600: #b5abfc;
+    --accent-700: #d2cefd;
+    --accent-800: #e7e5fe;
+    --accent-900: #f5f4ff;
+
+    --ok: #2f8f63;
+    --warn: #a0701a;
+    --danger: #c4453c;
+
+    --shadow-sm: 0 0 0 1px rgba(27, 29, 41, 0.10);
+    --shadow-md: 0 0 0 1px rgba(27, 29, 41, 0.08), 0 6px 18px rgba(27, 29, 41, 0.10);
+    --shadow-lg: 0 0 0 1px rgba(27, 29, 41, 0.10), 0 16px 40px rgba(27, 29, 41, 0.18);
+  }
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -130,44 +219,124 @@ code {
   stroke-linejoin: round;
 }
 
-/* ── Шапка ─────────────────────────────────────────────────────────────── */
-.topbar {
+/* ── Боковое меню ──────────────────────────────────────────────────────────
+   Навигация слева, а не сверху: пунктов стало больше (камеры, пользователи,
+   журнал, настройки), и в строку они помещались только сокращениями.
+   По вертикали место дешёвое — список растёт вниз сколько угодно. */
+.shell {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
   position: sticky;
   top: 0;
-  z-index: 30;
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  backdrop-filter: blur(10px);
+  align-self: start;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-3);
+  background: var(--surface);
+  border-right: 1px solid var(--divider);
 }
-.topbar-inner {
+
+.brand {
   display: flex;
   align-items: center;
-  gap: var(--space-6);
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: var(--space-3) var(--space-8);
-  flex-wrap: wrap;
-}
-.brand {
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-4);
   font-weight: 500;
-  font-size: 17px;
+  font-size: 18px;
   letter-spacing: -0.01em;
   color: var(--text);
   text-decoration: none;
 }
-.topbar nav { display: flex; align-items: center; gap: var(--space-1); }
-.topbar nav a {
-  padding: 5px 12px;
+.brand .i { width: 22px; height: 22px; color: var(--accent); }
+
+.sidebar nav { display: flex; flex-direction: column; gap: 2px; }
+
+/* Заголовок группы. Отделяет «Настройки» от разделов, куда ходят каждый день. */
+.nav-group {
+  margin: var(--space-4) 0 var(--space-1);
+  padding: 0 var(--space-3);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px var(--space-3);
   border-radius: var(--radius-md);
   font-size: 14px;
   color: var(--text);
   text-decoration: none;
 }
-.topbar nav a:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
-.topbar nav a[aria-current="page"] {
+.nav-item .i { flex: none; width: 18px; height: 18px; color: var(--neutral-400); }
+.nav-item:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.nav-item[aria-current="page"] {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
 }
-.topbar-right { margin-left: auto; display: flex; align-items: center; gap: var(--space-2); }
+.nav-item[aria-current="page"] .i { color: var(--accent); }
+
+/* Учётная запись прижата к низу: там её ищут по привычке из других панелей. */
+.sidebar-foot {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--divider);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav-user { min-width: 0; }
+.nav-user .nav-user-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-logout {
+  width: 100%;
+  justify-content: flex-start;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+/* Узкий экран: меню превращается в полосу над содержимым и листается вбок.
+   Выдвижная панель потребовала бы состояния и скрипта — ради шести ссылок
+   это лишнее. */
+@media (max-width: 860px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .sidebar {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-1);
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--divider);
+  }
+  .brand { padding: 0 var(--space-3) 0 0; }
+  .sidebar nav { flex-direction: row; }
+  .nav-group { display: none; }
+  .nav-item { white-space: nowrap; }
+  .sidebar-foot {
+    margin: 0 0 0 auto;
+    padding: 0 0 0 var(--space-3);
+    flex-direction: row;
+    border-top: 0;
+    border-left: 1px solid var(--divider);
+  }
+}
 
 /* Кружок с инициалами: имя пользователя целиком в шапке съедало половину
    строки, а нужен только признак «кто вошёл». */
@@ -185,7 +354,6 @@ code {
 }
 
 /* Полоса под шапкой тает к краям — подпись оформления из макета. */
-.topbar-rule,
 .hr {
   height: 1px;
   border: 0;
@@ -198,10 +366,13 @@ code {
 
 /* ── Каркас страницы ───────────────────────────────────────────────────── */
 .container {
-  max-width: 1440px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: var(--space-8) var(--space-8) 96px;
 }
+
+/* Страницы без меню — вход, приглашение, пароль к ссылке. */
+.shell-plain { grid-template-columns: minmax(0, 1fr); }
 .container-narrow { max-width: 940px; }
 
 .page-head {
@@ -741,6 +912,46 @@ textarea.copyfield { width: 100%; }
 
 @media (max-width: 720px) {
   .container { padding: var(--space-4) var(--space-4) 64px; }
-  .topbar-inner { padding: var(--space-3) var(--space-4); gap: var(--space-3); }
   h1 { font-size: 24px; }
 }
+
+/* ── Выбор темы ────────────────────────────────────────────────────────────
+   Образцы нарисованы своими цветами, а не текущими переменными: смысл в том,
+   чтобы увидеть тему до переключения. */
+.theme-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.theme-choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.theme-choice:hover { border-color: color-mix(in srgb, var(--text) 45%, transparent); }
+.theme-choice.is-current { border-color: var(--accent); }
+.theme-choice input { margin: 0; accent-color: var(--accent); }
+.theme-choice-name { font-size: 14px; }
+
+.theme-swatch {
+  display: block;
+  height: 74px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--divider);
+}
+.theme-swatch-bar { display: block; height: 16px; }
+.theme-swatch-body { display: block; height: 100%; }
+
+.theme-swatch-dark .theme-swatch-bar { background: #232532; }
+.theme-swatch-dark .theme-swatch-body { background: #161826; }
+.theme-swatch-light .theme-swatch-bar { background: #ffffff; }
+.theme-swatch-light .theme-swatch-body { background: #f4f5fa; }
+/* «Как в системе» — половина одной темы, половина другой. */
+.theme-swatch-auto .theme-swatch-bar { background: linear-gradient(to right, #232532 50%, #ffffff 50%); }
+.theme-swatch-auto .theme-swatch-body { background: linear-gradient(to right, #161826 50%, #f4f5fa 50%); }

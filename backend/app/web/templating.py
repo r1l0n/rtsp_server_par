@@ -17,7 +17,7 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
-templates.env.globals["app_name"] = "RTSP Gateway"
+templates.env.globals["app_name"] = "RTSP"
 templates.env.globals["Role"] = Role
 
 #: Состояния камеры и роли по-русски. Раньше в интерфейс попадали сами значения
@@ -53,6 +53,38 @@ def _format_timestamp(value: float) -> str:
 templates.env.filters["timestamp"] = _format_timestamp
 
 
+#: Тема оформления. Хранится в cookie, а не в профиле: она про устройство,
+#: а не про человека — в тёмной аппаратной и на светлом ноутбуке удобны разные.
+THEME_COOKIE = "theme"
+DEFAULT_THEME = "dark"
+
+THEMES: dict[str, str] = {
+    "dark": "Тёмная",
+    "light": "Светлая",
+    "auto": "Как в системе",
+}
+
+
+def current_theme(request: Request) -> str:
+    """Тема из cookie. Незнакомое значение молча превращается в тёмную."""
+    value = request.cookies.get(THEME_COOKIE, "")
+    return value if value in THEMES else DEFAULT_THEME
+
+
+def set_theme_cookie(response: Response, theme: str) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        THEME_COOKIE,
+        theme if theme in THEMES else DEFAULT_THEME,
+        # Год: настройка оформления не должна теряться вместе с сессией.
+        max_age=365 * 24 * 3600,
+        httponly=False,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
 def render(
     request: Request,
     template: str,
@@ -67,6 +99,7 @@ def render(
     context["csp_nonce"] = getattr(request.state, "csp_nonce", "")
     context["request_id"] = getattr(request.state, "request_id", "")
     context["csrf_token"] = session.csrf if session else ""
+    context.setdefault("theme", current_theme(request))
     return templates.TemplateResponse(request, template, context, status_code=status_code)
 
 
@@ -109,6 +142,7 @@ NOTICES: dict[str, str] = {
     "password_changed": "Пароль изменён.",
     "sessions_revoked": "Остальные сессии завершены.",
     "user_created": "Пользователь создан.",
+    "theme_saved": "Тема сохранена.",
     "user_updated": "Пользователь обновлён.",
     "invite_sent": "Приглашение отправлено на указанный адрес.",
     "invite_revoked": "Приглашение отозвано. Ссылка из письма больше не работает.",

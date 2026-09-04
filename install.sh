@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Интерактивная установка RTSP Gateway на чистый Linux-сервер.
+# Интерактивная установка RTSP на чистый Linux-сервер.
 #
 #     sudo bash install.sh
 #
@@ -49,7 +49,7 @@ banner() {
     printf '%s\n' "$B$CYN"
     cat <<'ART'
   ┌─────────────────────────────────────────────┐
-  │   RTSP Gateway — установка                  │
+  │   RTSP — установка                  │
   │   камеры RTSP  ─▶  публичные https-ссылки   │
   └─────────────────────────────────────────────┘
 ART
@@ -621,7 +621,7 @@ SMTP_SECURITY=${SMTP_SECURITY}
 SMTP_USERNAME=${SMTP_USERNAME}
 SMTP_PASSWORD=${SMTP_PASSWORD}
 MAIL_FROM=${MAIL_FROM}
-MAIL_FROM_NAME=RTSP Gateway
+MAIL_FROM_NAME=RTSP
 ENV
     else
         cat >> .env <<'ENV'
@@ -638,7 +638,7 @@ ENV
 #SMTP_USERNAME=noreply@example.com
 #SMTP_PASSWORD=
 #MAIL_FROM=noreply@example.com
-#MAIL_FROM_NAME=RTSP Gateway
+#MAIL_FROM_NAME=RTSP
 ENV
     fi
 

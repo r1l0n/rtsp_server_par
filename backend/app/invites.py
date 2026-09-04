@@ -33,7 +33,7 @@ from .models import Invitation, Role, User
 EMAIL_RE = re.compile(r"\A[^@\s]+@[^@\s]+\.[A-Za-z]{2,}\Z")
 MAX_EMAIL_LENGTH = 320
 
-SUBJECT = "Приглашение в RTSP Gateway"
+SUBJECT = "Приглашение в RTSP"
 
 
 class InviteError(ValueError):
@@ -119,11 +119,11 @@ def _render_email(invitation: Invitation, token: str, inviter: User) -> tuple[st
     who = inviter.full_name.strip() or inviter.email
     hours = settings.invite_ttl_hours
     name = invitation.full_name.strip()
-    greeting = f"Здравствуйте, {name}!" if name else "Здравствуйте!"
+    greeting = f"Здравствуйте, {name}," if name else "Здравствуйте,"
 
     text = (
         f"{greeting}\n\n"
-        f"{who} приглашает вас в RTSP Gateway — сервис просмотра камер.\n\n"
+        f"{who} приглашает вас в RTSP — сервис просмотра камер.\n\n"
         f"Чтобы начать работу, откройте ссылку и задайте пароль:\n"
         f"{url}\n\n"
         f"Ссылка одноразовая и действует {hours} ч.\n"
@@ -132,33 +132,95 @@ def _render_email(invitation: Invitation, token: str, inviter: User) -> tuple[st
         f"без перехода по ссылке учётная запись не создаётся.\n"
     )
 
-    body = html.escape(url)
-    html_body = f"""<!DOCTYPE html>
-<html lang="ru"><body style="margin:0;padding:24px;background:#f6f7f9;
- font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c1e21">
-  <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:12px;padding:28px">
-    <p style="margin:0 0 16px;font-size:15px">{html.escape(greeting)}</p>
-    <p style="margin:0 0 20px;font-size:15px;line-height:1.5">
-      {html.escape(who)} приглашает вас в <strong>RTSP Gateway</strong> —
-      сервис просмотра камер.
-    </p>
-    <p style="margin:0 0 24px">
-      <a href="{body}" style="display:inline-block;padding:11px 20px;border-radius:8px;
-         background:#1c1e21;color:#fff;text-decoration:none;font-size:15px">Задать пароль</a>
-    </p>
-    <p style="margin:0 0 8px;font-size:13px;color:#65676b">
-      Ссылка одноразовая и действует {hours} ч. Если кнопка не работает,
-      скопируйте адрес в браузер:
-    </p>
-    <p style="margin:0 0 20px;font-size:13px;word-break:break-all"><a href="{body}"
-       style="color:#1a6ed8">{body}</a></p>
-    <p style="margin:0;font-size:13px;color:#65676b">
-      Если вы не ждали этого письма — удалите его: без перехода по ссылке
-      учётная запись не создаётся.
-    </p>
-  </div>
-</body></html>"""
-    return text, html_body
+    return text, _render_html(url, greeting=greeting, who=who, hours=hours)
+
+
+#: Разметка письма — таблицами и с инлайновыми стилями.
+#:
+#: Это не небрежность, а требование среды: Outlook рисует письма движком Word,
+#: который не знает ни flex, ни grid, а Gmail вырезает <style> из <head>.
+#: Всё, что сложнее таблицы с inline-style, ломается у половины получателей —
+#: и увидит это не разработчик, а сотрудник, которого позвали в сервис.
+_BG = "#161826"
+_CARD = "#232532"
+_TEXT = "#e9e9ed"
+_MUTED = "#9397ab"
+_ACCENT = "#7d6fd1"
+_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
+
+def _render_html(url: str, *, greeting: str, who: str, hours: int) -> str:
+    safe_url = html.escape(url, quote=True)
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="supported-color-schemes" content="dark light">
+<title>Приглашение</title>
+</head>
+<body style="margin:0;padding:0;background:{_BG};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="background:{_BG};padding:40px 16px;">
+  <tr>
+    <td align="center">
+      <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0"
+             style="width:100%;max-width:560px;background:{_CARD};border-radius:16px;">
+        <tr>
+          <td align="center" style="padding:44px 40px 40px;font-family:{_FONT};">
+
+            <div style="font-size:22px;font-weight:700;letter-spacing:0.18em;
+                        color:{_ACCENT};padding-bottom:28px;">RTSP</div>
+
+            <h1 style="margin:0 0 18px;font-size:24px;line-height:1.3;font-weight:600;
+                       color:{_TEXT};">{html.escape(greeting)}</h1>
+
+            <p style="margin:0 0 32px;font-size:15px;line-height:1.6;color:{_MUTED};">
+              {html.escape(who)} приглашает вас в сервис просмотра камер.
+              Нажмите кнопку ниже, чтобы задать пароль и войти.
+            </p>
+
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0"
+                   align="center" style="margin:0 auto 32px;">
+              <tr>
+                <td align="center" bgcolor="{_ACCENT}" style="border-radius:10px;">
+                  <a href="{safe_url}"
+                     style="display:inline-block;padding:15px 40px;font-family:{_FONT};
+                            font-size:16px;font-weight:600;color:#ffffff;
+                            text-decoration:none;border-radius:10px;">Задать пароль</a>
+                </td>
+              </tr>
+            </table>
+
+            <p style="margin:0 0 10px;font-size:13px;line-height:1.6;color:{_MUTED};">
+              Ссылка одноразовая и действует {hours} ч.
+              Если кнопка не работает, откройте адрес вручную:
+            </p>
+            <p style="margin:0;font-size:13px;line-height:1.6;word-break:break-all;">
+              <a href="{safe_url}" style="color:{_ACCENT};">{html.escape(url)}</a>
+            </p>
+
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 40px;">
+            <div style="height:1px;background:#3f424d;"></div>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding:24px 40px 32px;font-family:{_FONT};
+                                    font-size:12px;line-height:1.6;color:#75798c;">
+            Если вы не ждали этого письма — удалите его.
+            Без перехода по ссылке учётная запись не создаётся.
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>"""
 
 
 async def send_email(

@@ -32,7 +32,7 @@ def _config(**kwargs: object) -> mail.MailConfig:
         "username": "",
         "password": "",
         "sender": "noreply@cam.test",
-        "from_name": "RTSP Gateway",
+        "from_name": "RTSP",
         "timeout": 15,
         "source": "panel",
     }
@@ -113,8 +113,28 @@ def test_email_carries_the_link_in_both_parts() -> None:
 
 
 def test_email_greets_by_name_when_it_is_known() -> None:
-    text, _ = invites._render_email(_invitation(full_name="Анна"), "T", _inviter())
-    assert text.startswith("Здравствуйте, Анна!")
+    text, html_body = invites._render_email(_invitation(full_name="Анна"), "T", _inviter())
+    assert text.startswith("Здравствуйте, Анна,")
+    assert "Здравствуйте, Анна," in html_body
+
+
+def test_email_is_laid_out_with_tables() -> None:
+    """Outlook рисует письма движком Word: ни flex, ни grid там нет.
+
+    Проверка дешёвая, а ломается это молча и только у получателя.
+    """
+    _, html_body = invites._render_email(_invitation(), "T", _inviter())
+    assert "<table" in html_body
+    assert "display:flex" not in html_body
+    assert "display:grid" not in html_body
+    # Стили только инлайновые: <style> в <head> Gmail вырезает.
+    assert "<style" not in html_body
+
+
+def test_email_button_and_fallback_point_at_the_same_link() -> None:
+    """Кнопка не работает у части почтовиков — адрес обязан быть и текстом."""
+    _, html_body = invites._render_email(_invitation(), "TOKEN123", _inviter())
+    assert html_body.count("https://cam.test/invite/TOKEN123") >= 3
 
 
 def test_email_names_the_inviter() -> None:

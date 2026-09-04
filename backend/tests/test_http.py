@@ -40,6 +40,27 @@ def test_admin_area_redirects_anonymous(client: TestClient) -> None:
     assert "/login" in response.headers["location"]
 
 
+@pytest.mark.parametrize("path", ["/settings/theme", "/settings/mail"])
+def test_settings_area_redirects_anonymous(client: TestClient, path: str) -> None:
+    """Заодно доказывает, что раздел вообще подключён к приложению."""
+    response = client.get(path, follow_redirects=False)
+    assert response.status_code == 303
+    assert "/login" in response.headers["location"]
+
+
+def test_login_page_carries_the_theme_attribute(client: TestClient) -> None:
+    """Тема должна работать и до входа — страница входа тоже оформлена."""
+    assert 'data-theme="dark"' in client.get("/login").text
+    response = client.get("/login", cookies={"theme": "light"})
+    assert 'data-theme="light"' in response.text
+
+
+def test_unknown_theme_cookie_falls_back_to_dark(client: TestClient) -> None:
+    """Значение приходит из браузера — доверять ему нельзя."""
+    response = client.get("/login", cookies={"theme": "../../etc/passwd"})
+    assert 'data-theme="dark"' in response.text
+
+
 def test_invalid_session_cookie_is_not_fatal(client: TestClient) -> None:
     response = client.get("/", cookies={SESSION_COOKIE: "garbage-value"}, follow_redirects=False)
     assert response.status_code == 303

@@ -36,7 +36,7 @@
 {% endif %}
 
 <section class="card">
-  <form method="post" action="/admin/mail">
+  <form method="post" action="/settings/mail">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
     <label class="check">
@@ -136,7 +136,7 @@
         <span class="hint">Отправим письмо на {{ user.email }} — вашему собственному адресу.
           Сохраните изменения до проверки: письмо уходит по тому, что лежит в базе.</span>
       </div>
-      <form method="post" action="/admin/mail/test" class="inline">
+      <form method="post" action="/settings/mail/test" class="inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-secondary">Отправить проверочное письмо</button>
       </form>

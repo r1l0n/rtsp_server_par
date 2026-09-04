@@ -27,6 +27,7 @@ from .web import (
     panel_views,
     profile_views,
     public_views,
+    settings_views,
 )
 from .web.templating import STATIC_DIR, redirect, render
 
@@ -133,7 +134,7 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level)
 
     app = FastAPI(
-        title="RTSP Gateway",
+        title="RTSP",
         version="0.1.0",
         lifespan=lifespan,
         # Схема API наружу не публикуется: сервис не для внешних интеграций.
@@ -157,6 +158,7 @@ def create_app() -> FastAPI:
     app.include_router(invite_views.router)
     app.include_router(profile_views.router)
     app.include_router(admin_views.router)
+    app.include_router(settings_views.router)
     app.include_router(panel_views.router)
 
     _register_error_handlers(app)

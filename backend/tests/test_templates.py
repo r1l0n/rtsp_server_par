@@ -142,7 +142,7 @@ def test_mail_settings_page_never_returns_the_password() -> None:
     )
     assert "секрет-smtp" not in html
     assert "smtp.panel.example" in html
-    assert 'action="/admin/mail/test"' in html
+    assert 'action="/settings/mail/test"' in html
 
 
 def test_mail_settings_page_works_without_a_saved_row() -> None:
@@ -162,6 +162,45 @@ def test_mail_settings_page_works_without_a_saved_row() -> None:
     )
     assert "smtp.env.example" in html
     assert ".env" in html
+
+
+def test_sidebar_hides_admin_sections_from_operators() -> None:
+    """Меню не должно показывать то, куда всё равно не пустят."""
+    from app.web.templating import THEMES
+
+    operator = User(id=uuid.uuid4(), email="op@example.com", role=Role.operator)
+    html = templates.env.get_template("settings_theme.html").render(
+        request=types.SimpleNamespace(url=types.SimpleNamespace(path="/settings/theme")),
+        user=operator, themes=THEMES, theme="dark", csrf_token="t",
+    )
+    assert "/settings/theme" in html
+    assert "/settings/mail" not in html
+    assert "/admin/users" not in html
+    assert "/admin/audit" not in html
+
+
+def test_sidebar_shows_every_section_to_admins() -> None:
+    from app.web.templating import THEMES
+
+    admin = User(id=uuid.uuid4(), email="admin@example.com", role=Role.admin)
+    html = templates.env.get_template("settings_theme.html").render(
+        request=types.SimpleNamespace(url=types.SimpleNamespace(path="/settings/theme")),
+        user=admin, themes=THEMES, theme="dark", csrf_token="t",
+    )
+    for link in ("/admin/users", "/admin/audit", "/settings/theme", "/settings/mail", "/profile"):
+        assert link in html, link
+
+
+def test_theme_reaches_the_html_tag() -> None:
+    """Атрибут data-theme — единственное, чем страница выбирает палитру."""
+    from app.web.templating import THEMES
+
+    admin = User(id=uuid.uuid4(), email="admin@example.com", role=Role.admin)
+    html = templates.env.get_template("settings_theme.html").render(
+        request=types.SimpleNamespace(url=types.SimpleNamespace(path="/settings/theme")),
+        user=admin, themes=THEMES, theme="light", csrf_token="t",
+    )
+    assert '<html lang="ru" data-theme="light">' in html
 
 
 def test_invite_page_posts_back_to_its_own_token() -> None:

@@ -131,7 +131,7 @@ class MailSettings(Base):
     password_enc: Mapped[bytes | None] = mapped_column(LargeBinary, default=None)
 
     mail_from: Mapped[str] = mapped_column(String(320), default="")
-    from_name: Mapped[str] = mapped_column(String(200), default="RTSP Gateway")
+    from_name: Mapped[str] = mapped_column(String(200), default="RTSP")
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=15)
 
     #: Когда последний раз удалось отправить письмо — «работает ли почта»
