@@ -139,6 +139,41 @@ def test_mediamtx_permissions_match_compose_subnets(compose: dict, mediamtx: dic
     assert edge in read_only["ips"], "Caddy из сети edge должен иметь право читать потоки"
 
 
+# ─── IPv6 наружу ─────────────────────────────────────────────────────────────
+def _ipv6_networks(compose: dict) -> set[str]:
+    return {
+        name for name, net in compose["networks"].items()
+        if (net or {}).get("enable_ipv6")
+    }
+
+
+def test_ipv6_network_reaches_only_the_service_that_sends_mail(compose: dict) -> None:
+    """IPv6 заведён ради SMTP, и выдан он должен быть одному api.
+
+    Чем шире эта сеть, тем больше шансов, что какой-нибудь внутренний вызов
+    уедет по IPv6 мимо списков доступа, составленных из подсетей IPv4.
+    """
+    ipv6 = _ipv6_networks(compose)
+    assert ipv6, "сеть с IPv6 пропала — почта на хостингах с фильтром IPv4 отвалится"
+
+    for name, service in compose["services"].items():
+        on_ipv6 = ipv6 & set(service.get("networks", []))
+        assert not on_ipv6 or name == "api", (
+            f"сервис {name} подключён к IPv6-сети {on_ipv6}; "
+            f"её назначение — исходящий SMTP из api"
+        )
+
+
+def test_mediamtx_stays_out_of_the_ipv6_network(compose: dict) -> None:
+    """Ключевая связка: доступ к Control API выдан по подсетям IPv4.
+
+    Появись у mediamtx адрес IPv6, api пошёл бы к нему по нему же и получил
+    бы 401 от authInternalUsers — встало бы всё видео, а причина выглядела
+    бы как «реконсилятор сломался».
+    """
+    assert not _ipv6_networks(compose) & set(compose["services"]["mediamtx"]["networks"])
+
+
 def test_only_edge_and_core_can_reach_mediamtx(compose: dict, mediamtx: dict) -> None:
     allowed = {ip for user in mediamtx["authInternalUsers"] for ip in user["ips"]}
     data_subnet = _subnet(compose, "data")

@@ -194,11 +194,26 @@ class SMTPUnreachable(OSError):
     """Ни один адрес имени не отозвался. В тексте — что ответил каждый."""
 
 
+#: Адрес, по которому в прошлый раз удалось подключиться, — на хост и порт.
+#:
+#: Нужен, когда один из адресов имени «чёрная дыра»: хостинг режет исходящий
+#: SMTP по IPv4, молча роняя пакеты, а по IPv6 пускает. Порядок адресов при
+#: этом выбираем не мы — его задаёт RFC 6724, и с адресом ULA (а именно такой
+#: выдаёт docker) IPv4 оказывается первым. Без этой памяти каждое письмо
+#: сначала выжидало бы полный таймаут на заблокированном адресе.
+_LAST_GOOD: dict[tuple[str, int], tuple[object, ...]] = {}
+
+
 def _connect(host: str, port: int, timeout: float) -> socket.socket:
     try:
         addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError as exc:
         raise SMTPUnreachable(f"имя {host} не разрешается: {exc}") from exc
+
+    # Удачный в прошлый раз адрес пробуем первым, порядок остальных не трогаем.
+    remembered = _LAST_GOOD.get((host, port))
+    if remembered is not None:
+        addresses.sort(key=lambda item: item[4] != remembered)
 
     failures: list[str] = []
     for family, socktype, proto, _canonname, address in addresses:
@@ -210,7 +225,11 @@ def _connect(host: str, port: int, timeout: float) -> socket.socket:
             sock.close()
             kind = "IPv6" if family == socket.AF_INET6 else "IPv4"
             failures.append(f"{address[0]} [{kind}] — {exc.strerror or exc}")
+            if address == remembered:
+                # Больше не работает — пусть в следующий раз решает система.
+                _LAST_GOOD.pop((host, port), None)
         else:
+            _LAST_GOOD[(host, port)] = address
             return sock
 
     raise SMTPUnreachable("; ".join(failures) or f"у имени {host} нет адресов")

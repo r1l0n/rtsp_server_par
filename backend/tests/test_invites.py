@@ -313,6 +313,14 @@ def fake_smtp(monkeypatch: pytest.MonkeyPatch) -> type[_FakeSMTP]:
 
 
 # ─── Перебор адресов ─────────────────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _forget_addresses() -> object:
+    """Память об удачном адресе — глобальная, между тестами её не тащим."""
+    mail._LAST_GOOD.clear()
+    yield
+    mail._LAST_GOOD.clear()
+
+
 def _addrinfo(*addresses: tuple[int, str]) -> list[tuple]:
     return [
         (family, socket.SOCK_STREAM, 6, "", (ip, 587, 0, 0) if family == socket.AF_INET6
@@ -384,6 +392,71 @@ def test_connect_returns_the_first_address_that_answers(
     monkeypatch.setattr(socket, "socket", _Socket)
 
     assert mail._connect("smtp.yandex.ru", 587, 5).family == socket.AF_INET
+
+
+def test_working_address_is_tried_first_next_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Заблокированный адрес не должен съедать таймаут на каждом письме.
+
+    Провайдер, режущий исходящий SMTP по IPv4, роняет пакеты молча — попытка
+    висит до таймаута. Порядок адресов задаёт система, и с ULA-адресом docker
+    она ставит первым как раз IPv4. Один раз подождать придётся, дальше —
+    сразу по рабочему адресу.
+    """
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda *a, **kw: _addrinfo(
+            (socket.AF_INET, "77.88.21.158"), (socket.AF_INET6, "2a02:6b8::19d")
+        ),
+    )
+
+    attempts: list[str] = []
+
+    class _Socket:
+        def __init__(self, family: int, *_: object) -> None:
+            self.family = family
+
+        def settimeout(self, _: float) -> None: ...
+        def close(self) -> None: ...
+
+        def connect(self, address: tuple) -> None:
+            attempts.append(address[0])
+            if self.family == socket.AF_INET:
+                raise TimeoutError("timed out")
+
+    monkeypatch.setattr(socket, "socket", _Socket)
+
+    mail._connect("smtp.yandex.ru", 587, 5)
+    assert attempts == ["77.88.21.158", "2a02:6b8::19d"]
+
+    attempts.clear()
+    mail._connect("smtp.yandex.ru", 587, 5)
+    assert attempts == ["2a02:6b8::19d"], "рабочий адрес обязан идти первым"
+
+
+def test_remembered_address_is_forgotten_when_it_stops_working(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mail._LAST_GOOD[("smtp.yandex.ru", 587)] = ("2a02:6b8::19d", 587, 0, 0)
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda *a, **kw: _addrinfo((socket.AF_INET6, "2a02:6b8::19d")),
+    )
+
+    class _Socket:
+        def __init__(self, *_: object) -> None: ...
+        def settimeout(self, _: float) -> None: ...
+        def close(self) -> None: ...
+
+        def connect(self, address: tuple) -> None:
+            raise OSError(101, "Network is unreachable")
+
+    monkeypatch.setattr(socket, "socket", _Socket)
+
+    with pytest.raises(mail.SMTPUnreachable):
+        mail._connect("smtp.yandex.ru", 587, 5)
+    assert ("smtp.yandex.ru", 587) not in mail._LAST_GOOD
 
 
 def test_unresolvable_name_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
