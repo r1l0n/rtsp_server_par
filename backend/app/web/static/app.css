@@ -294,6 +294,8 @@ code {
   flex-direction: column;
   gap: 2px;
 }
+.nav-account { display: flex; align-items: center; gap: var(--space-1); }
+.nav-account .nav-item { flex: 1; min-width: 0; }
 .nav-user { min-width: 0; }
 .nav-user .nav-user-name {
   overflow: hidden;
@@ -366,6 +368,11 @@ code {
 
 /* ── Каркас страницы ───────────────────────────────────────────────────── */
 .container {
+  /* width:100% обязателен. Раньше <main> был обычным блоком в потоке и
+     занимал всю ширину сам; теперь это ячейка грид-каркаса, а у грид-элемента
+     `margin: 0 auto` отменяет растягивание — коробка сжимается по содержимому
+     и центрируется. Отсюда и брались пустые поля в пол-экрана по бокам. */
+  width: 100%;
   max-width: 1280px;
   margin: 0 auto;
   padding: var(--space-8) var(--space-8) 96px;
@@ -374,6 +381,24 @@ code {
 /* Страницы без меню — вход, приглашение, пароль к ссылке. */
 .shell-plain { grid-template-columns: minmax(0, 1fr); }
 .container-narrow { max-width: 940px; }
+/* Списку камер потолок ни к чему: плитки — это кадры, и чем их больше видно
+   разом, тем быстрее оператор находит нужную. */
+.container-wide { max-width: none; }
+
+/* Панель над списком вместо заголовка: раздел назван в меню слева. */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+.toolbar-stat { font-size: 13px; color: var(--muted); }
+/* Поиск и кнопка держатся в одну строку: перенос гнал их друг под друга
+   и отъедал две строки высоты там, где хватало одной. */
+.toolbar .actions { flex-wrap: nowrap; }
+.toolbar .filter-input { width: clamp(160px, 26vw, 320px); }
 
 .page-head {
   display: flex;
@@ -434,8 +459,10 @@ code {
 /* ── Плитка камеры ─────────────────────────────────────────────────────── */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: var(--space-4);
+  /* 260px — компромисс: кадр 16:9 такой ширины ещё читается, а на мониторе
+     оператора в ряд помещается пять-шесть камер вместо двух. */
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3);
 }
 
 .tile {
@@ -450,18 +477,24 @@ code {
 .tile-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4) var(--space-4);
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) var(--space-3);
 }
-.tile-name { color: var(--text); text-decoration: none; }
-.tile-name:hover .card-title { color: var(--accent); }
+.tile-name {
+  color: var(--text);
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile-name:hover { color: var(--accent); }
 .tile-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--divider);
   font-size: 12px;
   color: var(--muted);
 }
@@ -856,7 +889,30 @@ textarea.copyfield { width: 100%; }
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
-.dialog-form { width: min(600px, 100%); }
+.dialog-form { width: min(620px, 100%); }
+.dialog-wide { width: min(1100px, 100%); }
+.dialog-body { display: flex; flex-direction: column; gap: var(--space-3); }
+
+/* Вкладки окна настроек. */
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--divider);
+}
+.tab {
+  padding: 8px var(--space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-panel { display: flex; flex-direction: column; gap: var(--space-2); }
 .dialog .page-head { margin-bottom: 0; }
 
 /* ── Страница камеры ───────────────────────────────────────────────────── */

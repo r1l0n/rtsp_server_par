@@ -6,8 +6,9 @@
   <meta name="referrer" content="no-referrer">
   {% if csrf_token %}<meta name="csrf-token" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css">
-  <link rel="stylesheet" href="/static/player.css">
+  {# ?v= — отпечаток статики. Без него браузер час держит старый css из кэша. #}
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_v }}">
+  <link rel="stylesheet" href="/static/player.css?v={{ asset_v }}">
 </head>
 <body>
 
@@ -40,27 +41,24 @@
         <svg class="i" aria-hidden="true"><use href="#i-journal"></use></svg>Журнал
       </a>
       {% endif %}
-
-      <div class="nav-group">Настройки</div>
-      <a class="nav-item" href="/settings/theme"
-         {% if path.startswith('/settings/theme') %}aria-current="page"{% endif %}>
-        <svg class="i" aria-hidden="true"><use href="#i-theme"></use></svg>Тема
-      </a>
-      {% if user.role == Role.admin %}
-      <a class="nav-item" href="/settings/mail"
-         {% if path.startswith('/settings/mail') %}aria-current="page"{% endif %}>
-        <svg class="i" aria-hidden="true"><use href="#i-mail"></use></svg>Почта
-      </a>
-      {% endif %}
     </nav>
 
     <div class="sidebar-foot">
       {% set who = (user.full_name or user.email).split() %}
-      <a class="nav-item nav-user" href="/profile"
-         {% if path.startswith('/profile') %}aria-current="page"{% endif %}>
-        <span class="avatar">{{ (who[0][0] ~ (who[1][0] if who|length > 1 else ''))|upper }}</span>
-        <span class="nav-user-name">{{ user.full_name or user.email }}</span>
-      </a>
+      <div class="nav-account">
+        <a class="nav-item nav-user" href="/profile"
+           {% if path.startswith('/profile') %}aria-current="page"{% endif %}>
+          <span class="avatar">{{ (who[0][0] ~ (who[1][0] if who|length > 1 else ''))|upper }}</span>
+          <span class="nav-user-name">{{ user.full_name or user.email }}</span>
+        </a>
+        {# Настройки — окном поверх страницы: за ними приходят на минуту
+           и возвращаются к тому, что делали. #}
+        <button type="button" class="btn btn-quiet btn-icon" data-dialog-open="settings"
+                data-dialog-src="/settings/dialog?next={{ path|urlencode }}"
+                aria-label="Настройки" title="Настройки">
+          <svg class="i" aria-hidden="true"><use href="#i-gear"></use></svg>
+        </button>
+      </div>
       <form method="post" action="/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="nav-item nav-logout">
@@ -78,7 +76,17 @@
   </main>
 </div>
 
-{% if user %}<script src="/static/panel.js" defer></script>{% endif %}
+{% if user %}
+{# Содержимое подгружается при первом открытии — см. data-dialog-src. #}
+<div class="dialog-backdrop" id="settings" data-dialog hidden>
+  <div class="dialog dialog-form" role="dialog" aria-modal="true" aria-label="Настройки">
+    <div class="dialog-body" data-dialog-content>
+      <p class="muted small">Загрузка…</p>
+    </div>
+  </div>
+</div>
+<script src="/static/panel.js?v={{ asset_v }}" defer></script>
+{% endif %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

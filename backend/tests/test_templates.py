@@ -173,8 +173,6 @@ def test_sidebar_hides_admin_sections_from_operators() -> None:
         request=types.SimpleNamespace(url=types.SimpleNamespace(path="/settings/theme")),
         user=operator, themes=THEMES, theme="dark", csrf_token="t",
     )
-    assert "/settings/theme" in html
-    assert "/settings/mail" not in html
     assert "/admin/users" not in html
     assert "/admin/audit" not in html
 
@@ -187,8 +185,55 @@ def test_sidebar_shows_every_section_to_admins() -> None:
         request=types.SimpleNamespace(url=types.SimpleNamespace(path="/settings/theme")),
         user=admin, themes=THEMES, theme="dark", csrf_token="t",
     )
-    for link in ("/admin/users", "/admin/audit", "/settings/theme", "/settings/mail", "/profile"):
+    for link in ("/admin/users", "/admin/audit", "/profile"):
         assert link in html, link
+
+
+def test_settings_open_as_a_dialog_not_a_menu_item() -> None:
+    """Настройки вызываются шестерёнкой рядом с профилем, а не пунктом меню."""
+    from app.web.templating import THEMES
+
+    admin = User(id=uuid.uuid4(), email="admin@example.com", role=Role.admin)
+    html = templates.env.get_template("settings_theme.html").render(
+        request=types.SimpleNamespace(url=types.SimpleNamespace(path="/")),
+        user=admin, themes=THEMES, theme="dark", csrf_token="t",
+    )
+    assert 'data-dialog-open="settings"' in html
+    assert "data-dialog-src" in html
+    assert "#i-gear" in html
+    # Группы «Настройки» в списке разделов быть не должно.
+    assert "nav-group" not in html
+
+
+def test_settings_dialog_shows_mail_only_to_admins() -> None:
+    from app import mail
+    from app.config import Settings
+    from app.web.templating import THEMES
+
+    def render_for(role: Role) -> str:
+        who = User(id=uuid.uuid4(), email="u@example.com", role=role)
+        return templates.env.get_template("_settings_dialog.html").render(
+            request=_request_stub(), user=who, themes=THEMES, theme="dark",
+            row=None, config=mail.config_from_env(Settings()), next="/", csrf_token="t",
+        )
+
+    assert 'action="/settings/mail"' in render_for(Role.admin)
+    assert 'action="/settings/mail"' not in render_for(Role.operator)
+
+
+def test_settings_dialog_returns_to_the_page_it_was_opened_from() -> None:
+    """Окно поверх страницы: после «Применить» пользователь остаётся на месте."""
+    from app import mail
+    from app.config import Settings
+    from app.web.templating import THEMES
+
+    admin = User(id=uuid.uuid4(), email="a@example.com", role=Role.admin)
+    html = templates.env.get_template("_settings_dialog.html").render(
+        request=_request_stub(), user=admin, themes=THEMES, theme="dark",
+        row=None, config=mail.config_from_env(Settings()),
+        next="/cameras/42", csrf_token="t",
+    )
+    assert html.count('name="next" value="/cameras/42"') >= 2
 
 
 def test_theme_reaches_the_html_tag() -> None:

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "_player.html" as player_macro %}
 {% block title %}Камеры — {{ app_name }}{% endblock %}
+{% block container_class %}container-wide{% endblock %}
 {% block content %}
 
 {# Имя переменной намеренно не начинается с «on»: тест шаблонов ищет
@@ -9,18 +10,17 @@
 {% set live = cameras | selectattr('status.value', 'equalto', 'online') | list | length %}
 {% set broken = cameras | rejectattr('status.value', 'in', ['online', 'idle']) | list | length %}
 
-<div class="page-head">
-  <div>
-    <h1>Камеры</h1>
-    <div class="subtitle">
-      {{ cameras | length }} всего · {{ live }} в эфире
-      {%- if broken %} · <span class="state-error">{{ broken }} требуют внимания</span>{% endif %}
-    </div>
+{# Заголовка «Камеры» нет намеренно: раздел уже назван в меню слева, и вторая
+   надпись о том же съедала бы верх экрана, ничего не сообщая. #}
+<div class="toolbar">
+  <div class="toolbar-stat">
+    {{ plural(cameras | length, 'камера', 'камеры', 'камер') }} · {{ live }} в эфире
+    {%- if broken %} · <span class="state-error">{{ broken }} требуют внимания</span>{% endif %}
   </div>
   <div class="actions">
     {% if cameras %}
     <input type="search" class="filter-input" data-filter-target=".grid .tile"
-           placeholder="Название, адрес, описание…" aria-label="Фильтр камер">
+           placeholder="Поиск по названию или адресу…" aria-label="Фильтр камер">
     {% endif %}
     <a class="btn btn-primary" href="/cameras/new">
       <svg class="i" aria-hidden="true"><use href="#i-plus"></use></svg>Добавить камеру
@@ -47,9 +47,6 @@
       <span class="shot-badge state-{{ camera.status.value }}">
         <span class="dot"></span>{{ camera_status_labels[camera.status.value] }}
       </span>
-      {% if camera.probe and camera.probe.width %}
-        <span class="shot-note">{{ camera.probe.width }}×{{ camera.probe.height }}</span>
-      {% endif %}
       {% if camera.is_enabled %}
       <button type="button" class="shot-play" data-watch="watch-{{ camera.id }}">
         <svg class="i" aria-hidden="true"><use href="#i-play"></use></svg>Смотреть
@@ -58,24 +55,14 @@
     </div>
 
     <div class="tile-body">
-      <a class="tile-name" href="/cameras/{{ camera.id }}">
-        <div class="card-title">{{ camera.name }}</div>
-      </a>
-      <div class="muted small">
-        {% if camera.probe and camera.probe.video_codec %}
-          {{ camera.probe.video_codec|upper }}
-          {%- if camera.probe.fps %} · {{ camera.probe.fps }} fps{% endif %}
-        {% else %}
-          кодеки ещё не проверены
-        {% endif %}
-      </div>
+      <a class="tile-name" href="/cameras/{{ camera.id }}">{{ camera.name }}</a>
       <div class="tile-foot">
-        <span>{{ link_counts.get(camera.id, 0) }} ссылок</span>
-        {% if not camera.is_enabled %}
-          <span class="tag tag-muted">выключена</span>
+        {% if camera.is_enabled %}
+          <span>{{ plural(link_counts.get(camera.id, 0), 'ссылка', 'ссылки', 'ссылок') }}</span>
         {% else %}
-          <a class="btn btn-ghost" href="/cameras/{{ camera.id }}">Настройки</a>
+          <span class="tag tag-muted">выключена</span>
         {% endif %}
+        <a class="btn btn-ghost" href="/cameras/{{ camera.id }}">Настройки</a>
       </div>
     </div>
   </article>
@@ -89,12 +76,16 @@
 {% for camera in cameras %}
   {% if camera.is_enabled %}
   <div class="dialog-backdrop" id="watch-{{ camera.id }}" data-dialog hidden>
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Просмотр камеры {{ camera.name }}">
+    <div class="dialog dialog-wide" role="dialog" aria-modal="true"
+         aria-label="Просмотр камеры {{ camera.name }}">
       <div class="dialog-head">
         <div class="dialog-title">{{ camera.name }}</div>
-        <button type="button" class="btn btn-quiet btn-icon" data-dialog-close aria-label="Закрыть">
-          <svg class="i" aria-hidden="true"><use href="#i-close"></use></svg>
-        </button>
+        <div class="actions">
+          <a class="btn btn-secondary" href="/cameras/{{ camera.id }}">Настройки</a>
+          <button type="button" class="btn btn-quiet btn-icon" data-dialog-close aria-label="Закрыть">
+            <svg class="i" aria-hidden="true"><use href="#i-close"></use></svg>
+          </button>
+        </div>
       </div>
       {{ player_macro.player(
            key=camera.mtx_path,
@@ -102,12 +93,6 @@
            audio=camera.audio_enabled,
            poster='/cameras/' ~ camera.id ~ '/snapshot.jpg',
            title=camera.name) }}
-      <div class="actions">
-        <a class="btn btn-secondary" href="/cameras/{{ camera.id }}">Настройки и ссылки</a>
-        <span class="hint">Просмотр из панели идёт по той же цепочке, что и публичная
-          ссылка, но без токена: если здесь картинка есть, а по ссылке нет — дело
-          в выдаче доступа, а не в потоке.</span>
-      </div>
     </div>
   </div>
   {% endif %}
@@ -117,5 +102,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/player.js" defer></script>
+<script src="/static/player.js?v={{ asset_v }}" defer></script>
 {% endblock %}

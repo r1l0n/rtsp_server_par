@@ -134,12 +134,62 @@
     openDialog = null;
   }
 
+  // Окно настроек приезжает с сервера при первом открытии, а не лежит в каждой
+  // странице: форма почты тянет за собой запрос к базе, и делать его на каждый
+  // показ любой страницы ради шестерёнки, на которую нажимают раз в месяц, —
+  // расточительно.
+  function fill(dialog, url) {
+    var slot = dialog.querySelector("[data-dialog-content]");
+    if (!slot || slot.dataset.loaded === url) return Promise.resolve();
+    return fetch(url, { headers: { "X-Requested-With": "fetch" }, credentials: "same-origin" })
+      .then(function (response) {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.text();
+      })
+      .then(function (markup) {
+        slot.innerHTML = markup;
+        slot.dataset.loaded = url;
+        bindDialogParts(slot);
+      })
+      .catch(function () {
+        slot.textContent = "Не удалось загрузить настройки. Обновите страницу.";
+      });
+  }
+
   document.querySelectorAll("[data-dialog-open], [data-watch]").forEach(function (button) {
     button.addEventListener("click", function () {
       var id = button.dataset.dialogOpen || button.dataset.watch;
-      open(document.getElementById(id));
+      var dialog = document.getElementById(id);
+      if (!dialog) return;
+      var src = button.dataset.dialogSrc;
+      if (!src) {
+        open(dialog);
+        return;
+      }
+      fill(dialog, src).then(function () {
+        open(dialog);
+      });
     });
   });
+
+  // Разметку, приехавшую после загрузки страницы, обработчики со старта
+  // не видят — привязываем их отдельно.
+  function bindDialogParts(root) {
+    root.querySelectorAll("[data-dialog-close]").forEach(function (button) {
+      button.addEventListener("click", close);
+    });
+
+    var tabs = root.querySelectorAll("[data-tab]");
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        tabs.forEach(function (other) {
+          other.classList.toggle("is-active", other === tab);
+          var panel = document.getElementById(other.dataset.tab);
+          if (panel) panel.hidden = other !== tab;
+        });
+      });
+    });
+  }
 
   document.querySelectorAll("[data-dialog-close]").forEach(function (button) {
     button.addEventListener("click", close);

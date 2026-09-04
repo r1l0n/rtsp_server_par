@@ -1,0 +1,138 @@
+{# Содержимое окна настроек. Отдаётся отдельно, без каркаса страницы:
+   его подтягивает panel.js при первом открытии шестерёнки. #}
+<div class="dialog-head">
+  <div class="dialog-title">Настройки</div>
+  <button type="button" class="btn btn-quiet btn-icon" data-dialog-close aria-label="Закрыть">
+    <svg class="i" aria-hidden="true"><use href="#i-close"></use></svg>
+  </button>
+</div>
+
+<div class="tabs" role="tablist">
+  <button type="button" class="tab is-active" data-tab="tab-theme" role="tab">Тема</button>
+  {% if user.role == Role.admin %}
+  <button type="button" class="tab" data-tab="tab-mail" role="tab">Почта</button>
+  {% endif %}
+</div>
+
+<div class="tab-panel" id="tab-theme">
+  <form method="post" action="/settings/theme">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next }}">
+    <div class="theme-choices">
+      {% for value, label in themes.items() %}
+      <label class="theme-choice{% if theme == value %} is-current{% endif %}">
+        <input type="radio" name="theme" value="{{ value }}"
+               {% if theme == value %}checked{% endif %}>
+        <span class="theme-swatch theme-swatch-{{ value }}" aria-hidden="true">
+          <span class="theme-swatch-bar"></span>
+          <span class="theme-swatch-body"></span>
+        </span>
+        <span class="theme-choice-name">{{ label }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-secondary" data-dialog-close>Закрыть</button>
+      <button type="submit" class="btn btn-primary">Применить</button>
+    </div>
+  </form>
+</div>
+
+{% if user.role == Role.admin %}
+<div class="tab-panel" id="tab-mail" hidden>
+  <p class="muted small">
+    Сервер, через который уходят приглашения сотрудникам.
+    {% if config.enabled %}Сейчас: {{ config.summary }}.{% else %}Сейчас выключена —
+    приглашения выпускаются, но панель показывает ссылку вместо отправки письма.{% endif %}
+  </p>
+
+  {% if row and row.last_error %}
+  <div class="alert alert-error">
+    <strong>Последняя отправка не удалась.</strong>
+    <p class="small">{{ row.last_error }}</p>
+  </div>
+  {% endif %}
+
+  <form method="post" action="/settings/mail">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next }}">
+
+    <label class="check">
+      <input type="checkbox" name="enabled" value="1" {% if config.enabled %}checked{% endif %}>
+      <span>Отправлять письма</span>
+    </label>
+
+    <div class="field-row">
+      <div class="field">
+        <label for="smtp-host">Сервер</label>
+        <input id="smtp-host" type="text" name="host" value="{{ config.host }}"
+               placeholder="smtp.yandex.ru" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="smtp-port">Порт</label>
+        <input id="smtp-port" type="number" name="port" value="{{ config.port }}" min="1" max="65535">
+      </div>
+      <div class="field">
+        <label for="smtp-security">Шифрование</label>
+        <select id="smtp-security" name="security">
+          <option value="starttls" {% if config.security == 'starttls' %}selected{% endif %}>STARTTLS — порт 587</option>
+          <option value="ssl" {% if config.security == 'ssl' %}selected{% endif %}>SSL/TLS — порт 465</option>
+          <option value="none" {% if config.security == 'none' %}selected{% endif %}>Без шифрования</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label for="smtp-user">Логин</label>
+        <input id="smtp-user" type="text" name="username" value="{{ config.username }}"
+               autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="smtp-pass">Пароль</label>
+        <input id="smtp-pass" type="password" name="password" autocomplete="new-password"
+               placeholder="{% if row and row.password_enc %}сохранён — оставьте пустым{% else %}пароль приложения{% endif %}">
+      </div>
+    </div>
+
+    {% if row and row.password_enc %}
+    <label class="check">
+      <input type="checkbox" name="clear_password" value="1">
+      <span>Удалить сохранённый пароль</span>
+    </label>
+    {% endif %}
+
+    <div class="field-row">
+      <div class="field">
+        <label for="smtp-from">От кого</label>
+        <input id="smtp-from" type="email" name="mail_from" value="{{ config.sender }}"
+               autocomplete="off">
+        <span class="hint">Обычно совпадает с логином</span>
+      </div>
+      <div class="field">
+        <label for="smtp-from-name">Имя отправителя</label>
+        <input id="smtp-from-name" type="text" name="from_name" value="{{ config.from_name }}"
+               maxlength="200">
+      </div>
+      <div class="field">
+        <label for="smtp-timeout">Таймаут, с</label>
+        <input id="smtp-timeout" type="number" name="timeout_seconds"
+               value="{{ config.timeout }}" min="1" max="120">
+      </div>
+    </div>
+
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-secondary" data-dialog-close>Закрыть</button>
+      <button type="submit" class="btn btn-primary">Сохранить</button>
+    </div>
+  </form>
+
+  <div class="hr"></div>
+  <form method="post" action="/settings/mail/test" class="actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next }}">
+    <button type="submit" class="btn btn-secondary">Отправить проверочное письмо</button>
+    <span class="hint">Придёт на {{ user.email }}. Сначала сохраните изменения.</span>
+  </form>
+</div>
+{% endif %}

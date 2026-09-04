@@ -13,6 +13,7 @@
 <section class="card">
   <form method="post" action="/settings/theme">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="/settings/theme?notice=theme_saved">
 
     <div class="theme-choices">
       {% for value, label in themes.items() %}

@@ -22,15 +22,50 @@ from ..config import get_settings
 from ..crypto import get_cipher
 from ..mail import MailError, MailNotConfigured
 from ..middleware import client_ip
-from ..models import MailSecurity, MailSettings, User
-from .templating import THEMES, notice, redirect, render, set_theme_cookie
+from ..models import MailSecurity, MailSettings, Role, User
+from .templating import THEMES, current_theme, notice, redirect, render, set_theme_cookie
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+
+#: Куда вернуть пользователя после сохранения. Настройки открываются окном
+#: поверх страницы, и уводить с неё после «Применить» нельзя.
+def _safe_next(value: str | None) -> str:
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return "/"
+    return value
 
 
 @router.get("", include_in_schema=False)
 async def settings_root() -> RedirectResponse:
     return redirect("/settings/theme", status_code=307)
+
+
+@router.get("/dialog", response_class=HTMLResponse)
+async def settings_dialog(
+    request: Request, db: DbSession, user: CurrentUser, next: str = "/"
+) -> HTMLResponse:
+    """Содержимое окна настроек — без каркаса страницы.
+
+    Форма почты видна только администратору, и данные для неё читаются
+    только когда он действительно открыл окно.
+    """
+    row = await mail.get_row(db) if user.role is Role.admin else None
+    config = (
+        mail.config_from_row(row)
+        if row is not None
+        else (mail.config_from_env() if user.role is Role.admin else None)
+    )
+    return render(
+        request,
+        "_settings_dialog.html",
+        user=user,
+        themes=THEMES,
+        theme=current_theme(request),
+        row=row,
+        config=config,
+        next=_safe_next(next),
+    )
 
 
 # ─── Тема ────────────────────────────────────────────────────────────────────
@@ -51,6 +86,7 @@ async def theme_save(
     user: CurrentUser,
     _: CsrfProtected,
     theme: Annotated[str, Form()] = "dark",
+    next: Annotated[str, Form()] = "/",
 ) -> Response:
     """Тема живёт в cookie, а не в профиле.
 
@@ -60,7 +96,7 @@ async def theme_save(
     """
     if theme not in THEMES:
         theme = "dark"
-    response = redirect("/settings/theme?notice=theme_saved")
+    response = redirect(_safe_next(next))
     set_theme_cookie(response, theme)
     return response
 
@@ -119,6 +155,7 @@ async def mail_settings_save(
     timeout_seconds: Annotated[str, Form()] = "15",
     enabled: Annotated[str, Form()] = "",
     clear_password: Annotated[str, Form()] = "",
+    next: Annotated[str, Form()] = "/",
 ) -> Response:
     form: dict[str, object] = {
         "host": host.strip(), "port": port, "security": security,
@@ -189,12 +226,16 @@ async def mail_settings_save(
         },
     )
     await db.commit()
-    return redirect("/settings/mail?notice=mail_saved")
+    return redirect(_with_notice(next, "mail_saved"))
 
 
 @router.post("/mail/test")
 async def mail_settings_test(
-    request: Request, db: DbSession, admin: RequireAdmin, _: CsrfProtected
+    request: Request,
+    db: DbSession,
+    admin: RequireAdmin,
+    _: CsrfProtected,
+    next: Annotated[str, Form()] = "/",
 ) -> Response:
     """Отправляет проверочное письмо самому администратору.
 
@@ -236,7 +277,13 @@ async def mail_settings_test(
     )
     await mail.record_result(db)
     await db.commit()
-    return redirect("/settings/mail?notice=mail_test_sent")
+    return redirect(_with_notice(next, "mail_test_sent"))
+
+
+def _with_notice(next_url: str, code: str) -> str:
+    target = _safe_next(next_url)
+    separator = "&" if "?" in target else "?"
+    return f"{target}{separator}notice={code}"
 
 
 def _positive_int(raw: str, *, low: int, high: int) -> int | None:

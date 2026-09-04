@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,42 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 templates.env.globals["app_name"] = "RTSP"
+
+
+def _asset_version() -> str:
+    """Отпечаток статики для ?v= в ссылках на css и js.
+
+    Caddy отдаёт /static/ с `max-age=3600`, поэтому без этого браузер ещё час
+    после обновления рисует страницу старой таблицей стилей — и выглядит это
+    как «вёрстка поехала», а не как «файл из кэша».
+    """
+    digest = hashlib.sha256()
+    for name in sorted(p.name for p in STATIC_DIR.glob("*.css")) + sorted(
+        p.name for p in STATIC_DIR.glob("*.js")
+    ):
+        digest.update((STATIC_DIR / name).read_bytes())
+    return digest.hexdigest()[:10]
+
+
+templates.env.globals["asset_v"] = _asset_version()
+
+#: Русские числительные: «1 ссылка», «2 ссылки», «5 ссылок». Без этого
+#: в интерфейсе висело «1 ссылок».
+def plural(count: int, one: str, few: str, many: str) -> str:
+    tail_100 = count % 100
+    tail_10 = count % 10
+    if 11 <= tail_100 <= 14:
+        word = many
+    elif tail_10 == 1:
+        word = one
+    elif 2 <= tail_10 <= 4:
+        word = few
+    else:
+        word = many
+    return f"{count} {word}"
+
+
+templates.env.globals["plural"] = plural
 templates.env.globals["Role"] = Role
 
 #: Состояния камеры и роли по-русски. Раньше в интерфейс попадали сами значения
