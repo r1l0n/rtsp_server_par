@@ -82,6 +82,8 @@ docker compose up -d --build && docker compose run --rm api alembic upgrade head
 docker compose exec -it api python -m app.cli create-admin --email admin@company.ru
 ```
 
+Обновление — `./ops/update.sh` (пересборка и миграции одним заходом).
+
 Полная инструкция — [docs/install.md](docs/install.md).
 Эксплуатация и разбор типовых сбоев — [docs/runbook.md](docs/runbook.md).
 

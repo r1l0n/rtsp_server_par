@@ -75,7 +75,7 @@ async def require_user(request: Request, session: SessionDep, user: OptionalUser
     if user is None:
         raise AuthRequired(next_url=request.url.path)
     # Скользящее окно: активный пользователь не выкидывается по таймауту.
-    await sessions.touch(session.sid)  # type: ignore[union-attr]
+    await sessions.touch(session)  # type: ignore[arg-type]
     return user
 
 

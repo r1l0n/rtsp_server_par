@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from . import schema_check
 from .auth.deps import AuthRequired, CsrfError, Forbidden, TwoFactorRequired
 from .config import get_settings
 from .db import dispose_engine, get_sessionmaker
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _ = settings.secret_key
 
     log.info("startup", domain=settings.domain, totp_policy=settings.totp_policy)
+    await _log_schema_state()
     try:
         yield
     finally:
@@ -50,6 +52,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await close_redis()
         await dispose_engine()
         log.info("shutdown")
+
+
+async def _log_schema_state() -> None:
+    """Забытая миграция должна быть видна при старте, а не на первой же форме.
+
+    Процесс при этом не роняем: без панели миграции накатывать неудобно, да и
+    отставание схемы ломает обычно одну новую страницу, а не весь сервис.
+    """
+    try:
+        async with get_sessionmaker()() as session:
+            fresh, state = await schema_check.status(session)
+    except Exception as exc:
+        # База может быть ещё не готова — это забота healthcheck'а, не наша.
+        log.warning("schema_check_failed", error=type(exc).__name__)
+        return
+
+    if fresh:
+        log.info("schema_ok", revision=state)
+    else:
+        log.error("schema_outdated", state=state, fix=schema_check.UPGRADE_HINT)
 
 
 health = APIRouter(tags=["health"])
@@ -63,15 +85,18 @@ async def healthz() -> PlainTextResponse:
 
 @health.get("/readyz", include_in_schema=False)
 async def readyz() -> JSONResponse:
-    """Readiness: доступны ли Postgres, Redis и MediaMTX."""
+    """Readiness: доступны ли Postgres, Redis и MediaMTX и накатана ли схема."""
     checks: dict[str, str] = {}
 
     try:
         async with get_sessionmaker()() as session:
             await session.execute(text("SELECT 1"))
+            fresh, state = await schema_check.status(session)
         checks["postgres"] = "ok"
+        checks["schema"] = "ok" if fresh else f"outdated: {state}"
     except Exception as exc:
         checks["postgres"] = f"error: {type(exc).__name__}"
+        checks["schema"] = "unknown"
 
     try:
         await get_redis().ping()

@@ -44,9 +44,9 @@ FRAME_TIMEOUT = 15
 #: Сколько ждём, что путь поднимется после того, как мы его разбудили.
 STREAM_WAIT = 18
 
-#: Что MediaMTX умеет отдать в LL-HLS. Шире, чем WebRTC (H.265 сюда попадает),
-#: но браузеры играют HEVC далеко не все — отсюда отдельная оговорка в выводе.
+#: Что MediaMTX умеет отдать в LL-HLS.
 HLS_VIDEO_CODECS = frozenset({"h264", "h265", "hevc"})
+HEVC = frozenset({"h265", "hevc"})
 
 OK = "ok"
 FAIL = "fail"
@@ -247,6 +247,15 @@ def _check_browser_compat(probe: ProbeResult, camera: Camera) -> list[tuple[str,
 
     if video in WEBRTC_VIDEO_CODECS:
         webrtc_video = (OK, f"видео {video.upper()} проходит в WebRTC как есть")
+    elif video in HEVC:
+        # Не FAIL: Chrome 136 и новее берёт H.265 в WebRTC по умолчанию,
+        # Safari умел и раньше. Ограничение — аппаратный декодер у зрителя.
+        webrtc_video = (
+            WARN,
+            "H.265 проходит в WebRTC, но только там, где у зрителя есть аппаратный "
+            "декодер: Safari и Chrome 136 или новее. Ниже написано, что умеет "
+            "браузер, из которого вы это читаете",
+        )
     else:
         webrtc_video = (
             FAIL,
@@ -255,13 +264,13 @@ def _check_browser_compat(probe: ProbeResult, camera: Camera) -> list[tuple[str,
         )
     steps.append(("webrtc", "WebRTC (WHEP)", *webrtc_video))
 
-    if video in HLS_VIDEO_CODECS and video not in ("h265", "hevc"):
+    if video in HLS_VIDEO_CODECS and video not in HEVC:
         hls_state = (OK, f"видео {video.upper()} играют все браузеры")
-    elif video in ("h265", "hevc"):
+    elif video in HEVC:
         hls_state = (
             WARN,
-            "H.265 в LL-HLS отдаётся, но играет только Safari и часть Chrome "
-            "с аппаратным декодером — в остальных браузерах будет чёрный экран",
+            "H.265 в LL-HLS играют Safari и Chrome 122 или новее с аппаратным "
+            "декодером; на Windows нужен ещё системный кодек HEVC",
         )
     else:
         hls_state = (FAIL, f"видео {video.upper() or 'неизвестного кодека'} в HLS не отдаётся")
@@ -580,9 +589,8 @@ def _summarize(report: Diagnosis, camera: Camera) -> None:
 
     if "webrtc" in keys and camera.profile is StreamProfile.passthrough:
         report.verdict = (
-            "Камера работает, но её кодек браузер не покажет. Включите профиль "
-            "«Перекодировать в H.264/Opus» — это единственное рабочее решение "
-            "для таких камер."
+            "Камера работает, но её кодек не играет ни один браузер. Включите "
+            "профиль «Перекодировать в H.264/Opus»."
         )
         return
     if "stream" in keys and camera.profile is StreamProfile.passthrough:

@@ -81,7 +81,8 @@
         <td class="muted small nowrap">{{ s.created_at | timestamp }}</td>
         <td class="muted small">{{ s.ip }}</td>
         <td class="small ellipsis">{{ s.user_agent }}</td>
-        <td class="nowrap">{% if s.sid == current_sid %}<span class="tag tag-outline">текущая</span>{% endif %}</td>
+        <td class="nowrap">{% if s.sid == current_sid %}<span class="tag tag-outline">текущая</span>{% endif %}
+          {% if s.expires_at %}<span class="tag tag-outline">запомнена до {{ s.expires_at | timestamp }}</span>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>

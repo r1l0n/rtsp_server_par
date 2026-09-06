@@ -11,6 +11,7 @@ import secrets
 import time
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from ..config import get_settings
 from ..redis_client import get_redis
@@ -34,6 +35,13 @@ class SessionData:
     #: True между вводом пароля и подтверждением второго фактора.
     #: Такая сессия не даёт доступа ни к чему, кроме страницы ввода кода.
     pending_2fa: bool
+    #: Пользователь поставил галочку «Запомнить меня». Хранится отдельно от
+    #: дедлайна: пока ждём второй фактор, сессия остаётся короткой, а флаг
+    #: переживает rotate() и превращается в дедлайн после ввода кода.
+    remember: bool = False
+    #: Абсолютный предел жизни долгой сессии: сколько её ни продлевай, дальше
+    #: этого момента она не живёт. 0 — обычная сессия со скользящим окном.
+    expires_at: float = 0.0
 
     @property
     def authenticated(self) -> bool:
@@ -48,7 +56,31 @@ def _index_key(user_id: str) -> str:
     return f"{_USER_INDEX}{user_id}"
 
 
-def _ttl_seconds() -> int:
+def _remember_seconds() -> int:
+    return get_settings().remember_me_days * 86400
+
+
+def _expire_index(pipe: Any, user_id: str, ttl: int) -> None:
+    """Держит индекс сессий пользователя живым дольше самой долгой из них.
+
+    NX ставит срок только что созданному индексу, GT поднимает существующий,
+    если новая сессия живёт дольше. Без GT короткая сессия обрезала бы индекс
+    под себя, и профиль вместе с «завершить остальные» переставали бы видеть
+    сессию с галочкой «Запомнить меня».
+    """
+    key = _index_key(user_id)
+    pipe.expire(key, ttl, nx=True)
+    pipe.expire(key, ttl, gt=True)
+
+
+def ttl_for(session: SessionData) -> int:
+    """Сколько сессии осталось жить, секунд.
+
+    Обычная сессия получает скользящее окно целиком, долгая — только остаток
+    до своего дедлайна.
+    """
+    if session.expires_at:
+        return max(1, int(session.expires_at - time.time()))
     return get_settings().session_ttl_minutes * 60
 
 
@@ -58,6 +90,7 @@ async def create(
     ip: str = "",
     user_agent: str = "",
     pending_2fa: bool = False,
+    remember: bool = False,
 ) -> SessionData:
     now = time.time()
     data = SessionData(
@@ -69,9 +102,13 @@ async def create(
         ip=ip,
         user_agent=user_agent[:400],
         pending_2fa=pending_2fa,
+        remember=remember,
+        # Дедлайн ставится только полноценной сессии: окно ввода кода TOTP не
+        # должно жить месяц, даже если галочка была отмечена.
+        expires_at=now + _remember_seconds() if remember and not pending_2fa else 0.0,
     )
     redis = get_redis()
-    ttl = _ttl_seconds()
+    ttl = ttl_for(data)
     pipe = redis.pipeline()
     pipe.hset(
         _key(data.sid),
@@ -83,11 +120,13 @@ async def create(
             "ip": data.ip,
             "user_agent": data.user_agent,
             "pending_2fa": "1" if data.pending_2fa else "0",
+            "remember": "1" if data.remember else "0",
+            "expires_at": str(data.expires_at),
         },
     )
     pipe.expire(_key(data.sid), ttl)
     pipe.sadd(_index_key(data.user_id), data.sid)
-    pipe.expire(_index_key(data.user_id), ttl)
+    _expire_index(pipe, data.user_id, ttl)
     await pipe.execute()
     return data
 
@@ -107,15 +146,19 @@ async def load(sid: str | None) -> SessionData | None:
         ip=raw.get("ip", ""),
         user_agent=raw.get("user_agent", ""),
         pending_2fa=raw.get("pending_2fa") == "1",
+        remember=raw.get("remember") == "1",
+        expires_at=float(raw.get("expires_at", 0) or 0),
     )
 
 
-async def touch(sid: str) -> None:
-    """Продлевает скользящее окно жизни сессии."""
+async def touch(session: SessionData) -> None:
+    """Продлевает скользящее окно жизни сессии — но не дальше её дедлайна."""
+    ttl = ttl_for(session)
     redis = get_redis()
     pipe = redis.pipeline()
-    pipe.hset(_key(sid), "last_seen", str(time.time()))
-    pipe.expire(_key(sid), _ttl_seconds())
+    pipe.hset(_key(session.sid), "last_seen", str(time.time()))
+    pipe.expire(_key(session.sid), ttl)
+    _expire_index(pipe, session.user_id, ttl)
     await pipe.execute()
 
 
@@ -140,6 +183,9 @@ async def rotate(session: SessionData, *, pending_2fa: bool | None = None) -> Se
         ip=session.ip,
         user_agent=session.user_agent,
         pending_2fa=session.pending_2fa if pending_2fa is None else pending_2fa,
+        # Галочка «Запомнить меня» пережидает второй фактор здесь: до сих пор
+        # это было только намерение, дедлайн появляется у новой сессии.
+        remember=session.remember,
     )
     await delete(session.sid)
     return fresh

@@ -75,6 +75,7 @@ async def login_form(request: Request, session: SessionDep, next: str = "/") -> 
         request,
         "login.html",
         next=safe_next(next),
+        remember_days=get_settings().remember_me_days,
         notice=notice(request.query_params.get("notice")),
     )
 
@@ -86,10 +87,16 @@ async def login(
     email: Annotated[str, Form()],
     password: Annotated[str, Form()],
     next: Annotated[str, Form()] = "/",
+    remember: Annotated[str | None, Form()] = None,
 ) -> Response:
     ip = client_ip(request)
     email = email.strip().lower()
     next_url = safe_next(next)
+    remember_days = get_settings().remember_me_days
+    # Браузер присылает поле только для отмеченной галочки. Дальше её состояние
+    # возвращается в форму при каждой ошибке: иначе опечатка в пароле молча
+    # сбрасывает выбор пользователя.
+    wants_remember = remember is not None and remember_days > 0
 
     by_ip = await ratelimit.hit("login_ip", ip, ratelimit.LOGIN_BY_IP)
     by_account = await ratelimit.hit("login_acct", email, ratelimit.LOGIN_BY_ACCOUNT)
@@ -102,6 +109,7 @@ async def login(
             next=next_url,
             email=email,
             error=f"Слишком много попыток. Повторите через {wait // 60 + 1} мин.",
+            remember=wants_remember, remember_days=remember_days,
         )
 
     user = await db.scalar(select(User).where(User.email == email))
@@ -116,6 +124,7 @@ async def login(
         return render(
             request, "login.html", status_code=401, next=next_url, email=email,
             error=INVALID_CREDENTIALS,
+            remember=wants_remember, remember_days=remember_days,
         )
 
     if user.locked_until is not None and user.locked_until > now:
@@ -125,6 +134,7 @@ async def login(
         return render(
             request, "login.html", status_code=429, next=next_url, email=email,
             error=f"Учётная запись временно заблокирована. Повторите через {minutes} мин.",
+            remember=wants_remember, remember_days=remember_days,
         )
 
     if not verify_password(user.password_hash, password):
@@ -142,6 +152,7 @@ async def login(
         return render(
             request, "login.html", status_code=401, next=next_url, email=email,
             error=INVALID_CREDENTIALS,
+            remember=wants_remember, remember_days=remember_days,
         )
 
     # Пароль верный.
@@ -153,10 +164,12 @@ async def login(
     user_agent = request.headers.get("user-agent", "")
 
     if user.totp_enabled:
-        pending = await sessions.create(user.id, ip=ip, user_agent=user_agent, pending_2fa=True)
+        pending = await sessions.create(
+            user.id, ip=ip, user_agent=user_agent, pending_2fa=True, remember=wants_remember
+        )
         await db.commit()
         response = redirect(f"/login/2fa?next={next_url}")
-        set_session_cookie(response, pending.sid)
+        set_session_cookie(response, pending)
         return response
 
     user.last_login_at = now
@@ -165,11 +178,13 @@ async def login(
     await db.commit()
     await ratelimit.reset("login_acct", email)
 
-    session = await sessions.create(user.id, ip=ip, user_agent=user_agent)
+    session = await sessions.create(
+        user.id, ip=ip, user_agent=user_agent, remember=wants_remember
+    )
     # Политика требует второй фактор, но он ещё не настроен — ведём настраивать.
     target = "/profile/2fa" if totp_required_for(user.role) else next_url
     response = redirect(target)
-    set_session_cookie(response, session.sid)
+    set_session_cookie(response, session)
     return response
 
 
@@ -236,7 +251,7 @@ async def totp_verify(
     # Смена уровня привилегий — новый идентификатор сессии (session fixation).
     fresh = await sessions.rotate(session, pending_2fa=False)
     response = redirect(next_url)
-    set_session_cookie(response, fresh.sid)
+    set_session_cookie(response, fresh)
     return response
 
 

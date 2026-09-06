@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     display_timezone: str = "Asia/Yekaterinburg"
     session_cookie_secure: bool = True
     session_ttl_minutes: int = 720
+    #: Срок сессии с галочкой «Запомнить меня». В отличие от обычной сессии это
+    #: жёсткий предел от момента входа: скользящее окно его не сдвигает, поэтому
+    #: пароль вводится минимум раз в месяц. 0 — галочку не показывать.
+    remember_me_days: int = 30
     default_link_ttl_hours: int = 24
     totp_policy: Literal["optional", "admins", "all"] = "admins"
 

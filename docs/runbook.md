@@ -34,11 +34,14 @@ docker compose exec api python -m app.cli healthcheck
 docker compose exec mediamtx wget -qO- http://127.0.0.1:9997/v3/paths/list
 ```
 
-Готовность зависимостей (изнутри сети, наружу закрыто):
+Готовность зависимостей и схемы базы (изнутри сети, наружу закрыто):
 
 ```bash
 docker compose exec api python -c "import httpx;print(httpx.get('http://127.0.0.1:8000/readyz').text)"
 ```
+
+Поле `schema` со значением `outdated` означает забытые миграции — см.
+«После обновления страница отвечает „Внутренняя ошибка сервиса“».
 
 ## Типовые ситуации
 
@@ -299,6 +302,42 @@ docker compose logs --tail=200 api | grep reset_mail_failed
 
 ```bash
 docker compose exec -it api python -m app.cli reset-password --email user@company.ru
+```
+
+### После обновления страница отвечает «Внутренняя ошибка сервиса»
+
+Первое, что стоит проверить, — накатаны ли миграции. Признак: всё остальное
+работает, а ломается ровно то, что появилось в новой версии. В трассировке
+будет `UndefinedTableError: relation "…" does not exist` — код уже знает про
+таблицу, которой в базе ещё нет.
+
+Причина одна: `docker compose up -d --build` без `alembic upgrade head`.
+Схема сверяется при старте, поэтому есть и прямая улика:
+
+```bash
+docker compose logs api | grep schema_outdated
+```
+
+Лечится в одну команду, данные при этом не теряются:
+
+```bash
+docker compose run --rm api alembic upgrade head
+```
+
+Что накатано сейчас и что ожидает код:
+
+```bash
+docker compose run --rm api alembic current && docker compose run --rm api alembic heads
+```
+
+Чтобы это не повторялось, обновляйтесь через `./ops/update.sh` — он делает
+пересборку и миграции одним заходом.
+
+Со страницы к трассировке ведёт код запроса — он показан в самом сообщении
+об ошибке:
+
+```bash
+docker compose logs api | grep <код-запроса>
 ```
 
 ### Браузер показывает ERR_SSL_PROTOCOL_ERROR

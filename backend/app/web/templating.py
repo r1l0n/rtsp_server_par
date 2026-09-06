@@ -13,7 +13,7 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from ..auth.sessions import SESSION_COOKIE, SessionData
+from ..auth.sessions import SESSION_COOKIE, SessionData, ttl_for
 from ..config import get_settings
 from ..models import Role, User
 
@@ -216,12 +216,14 @@ def render(
 
 
 # ─── cookie ──────────────────────────────────────────────────────────────────
-def set_session_cookie(response: Response, sid: str) -> None:
+def set_session_cookie(response: Response, session: SessionData) -> None:
     settings = get_settings()
     response.set_cookie(
         SESSION_COOKIE,
-        sid,
-        max_age=settings.session_ttl_minutes * 60,
+        session.sid,
+        # Тот же срок, что и у записи в Redis: у долгой сессии дедлайн
+        # абсолютный, поэтому обновлять cookie на каждом запросе не нужно.
+        max_age=ttl_for(session),
         httponly=True,
         secure=settings.session_cookie_secure,
         samesite="lax",

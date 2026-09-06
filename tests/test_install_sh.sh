@@ -183,6 +183,7 @@ check "выдающий сертификат"  "TLS_ISSUER=admin@company.ru"    
 check "политика 2FA"         "TOTP_POLICY=admins"              "$(grep '^TOTP_POLICY=' .env)"
 check "ключ берётся из файла" "APP_SECRET_KEY_FILE=/run/secrets/app_key" "$(grep '^APP_SECRET_KEY_FILE=' .env)"
 check "cookie только по https" "SESSION_COOKIE_SECURE=true"    "$(grep '^SESSION_COOKIE_SECURE=' .env)"
+check "«запомнить меня» 30 дней" "REMEMBER_ME_DAYS=30"          "$(grep '^REMEMBER_ME_DAYS=' .env)"
 check "приватные хосты запрещены" "ALLOW_PRIVATE_CAMERA_HOSTS=false" "$(grep '^ALLOW_PRIVATE_CAMERA_HOSTS=' .env)"
 if permissions_supported "$TMP"; then
     check "права 600" "600" "$(stat -c '%a' .env 2>/dev/null || echo '?')"

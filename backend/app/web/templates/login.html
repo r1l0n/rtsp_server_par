@@ -16,6 +16,15 @@
       <input id="login-password" type="password" name="password" required
              autocomplete="current-password">
     </div>
+    {% if remember_days %}
+    <label class="check">
+      <input type="checkbox" name="remember" {% if remember %}checked{% endif %}>
+      <span>Запомнить меня
+        <span class="hint">Не спрашивать пароль {{ remember_days }} дней на этом устройстве.
+          Не включайте на чужом компьютере.</span>
+      </span>
+    </label>
+    {% endif %}
     <button type="submit" class="btn btn-primary btn-block">Войти</button>
   </form>
   <p class="hint center"><a href="/forgot">Забыли пароль?</a></p>

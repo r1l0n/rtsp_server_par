@@ -90,13 +90,26 @@ def test_h264_passes_both_transports() -> None:
     assert steps["hls"] == OK
 
 
-def test_h265_fails_webrtc_and_only_warns_for_hls() -> None:
-    """Ровно тот случай, который выглядит как «чёрный экран без ошибок»."""
+def test_h265_warns_but_does_not_fail() -> None:
+    """H.265 больше не приговор: Chrome 136+ и Safari берут его в WebRTC.
+
+    Условие — аппаратный декодер у зрителя, поэтому предупреждение, а не «ок»:
+    у части зрителей всё равно будет чёрный экран.
+    """
     steps = dict((key, state) for key, _title, state, _detail in _check_browser_compat(
         _probe("hevc"), _camera()
     ))
-    assert steps["webrtc"] == FAIL
+    assert steps["webrtc"] == WARN
     assert steps["hls"] == WARN
+
+
+def test_codec_no_browser_plays_still_fails() -> None:
+    """А вот это по-прежнему отказ — и лечится только перекодированием."""
+    steps = dict((key, state) for key, _title, state, _detail in _check_browser_compat(
+        _probe("mjpeg"), _camera()
+    ))
+    assert steps["webrtc"] == FAIL
+    assert steps["hls"] == FAIL
 
 
 def test_transcoding_makes_everything_compatible() -> None:

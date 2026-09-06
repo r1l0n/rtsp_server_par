@@ -1,9 +1,16 @@
 """Проба камеры через ffprobe.
 
-Главная практическая засада этого сервиса — кодеки. Камера может отдавать
-H.265 или AAC, и такой поток браузер по WebRTC не сыграет. Пробуем камеру
-в момент добавления и сразу говорим оператору, нужен ли транскод, вместо того
-чтобы показывать ему чёрный квадрат.
+Главная практическая засада этого сервиса — кодеки. Пробуем камеру в момент
+добавления и сразу говорим оператору, что увидит зритель, вместо того чтобы
+показывать ему чёрный квадрат.
+
+Про H.265 отдельно. Раньше он считался здесь безнадёжным, и это давно не так:
+Chrome 136 (май 2025) включил H.265 в WebRTC по умолчанию, Safari умел его
+и раньше. Условие одно — аппаратный декодер у зрителя: программного декодера
+в Chrome нет намеренно, из-за патентов. Поэтому H.265 — не «не работает»,
+а «работает не у всех», и решать, приемлемо ли это, должен оператор: для
+внутреннего просмотра с известных машин перекодировать нечего, а для ссылки
+постороннему человеку это лотерея.
 """
 
 from __future__ import annotations
@@ -21,8 +28,10 @@ log = get_logger("probe")
 
 PROBE_TIMEOUT = 20
 
-#: Что MediaMTX умеет отдавать в WebRTC без перекодирования.
+#: Кодеки, которые WebRTC донесёт до любого браузера.
 WEBRTC_VIDEO_CODECS = frozenset({"h264", "vp8", "vp9", "av1"})
+#: Кодеки, которые WebRTC донесёт только туда, где есть аппаратный декодер.
+WEBRTC_VIDEO_CODECS_HW = frozenset({"h265", "hevc"})
 WEBRTC_AUDIO_CODECS = frozenset({"opus", "g722", "pcm_mulaw", "pcm_alaw"})
 
 
@@ -35,7 +44,10 @@ class ProbeResult:
     height: int = 0
     fps: float = 0.0
     audio_codec: str = ""
+    #: Кодек проходит везде.
     video_ok: bool = False
+    #: Кодек проходит, но только у зрителей с аппаратным декодером (H.265).
+    video_hw_only: bool = False
     audio_ok: bool = True
     recommended_profile: str = StreamProfile.passthrough.value
     notes: list[str] = field(default_factory=list)
@@ -160,22 +172,31 @@ def _interpret(streams: list[dict[str, Any]]) -> ProbeResult:
     result.height = int(video.get("height") or 0)
     result.fps = _parse_fps(str(video.get("r_frame_rate", "0/1")))
     result.video_ok = result.video_codec in WEBRTC_VIDEO_CODECS
+    result.video_hw_only = result.video_codec in WEBRTC_VIDEO_CODECS_HW
 
     if audio is not None:
         result.audio_codec = str(audio.get("codec_name", "")).lower()
         result.audio_ok = result.audio_codec in WEBRTC_AUDIO_CODECS
 
-    if not result.video_ok:
+    if result.video_hw_only:
+        # Перекодирование не навязываем: на машинах с аппаратным декодером
+        # поток пойдёт как есть, а это большинство современных.
+        result.notes.append(
+            f"видео в {result.video_codec.upper()} — покажут браузеры с аппаратным "
+            f"декодером (Safari, Chrome 136 и новее). На машине без него будет "
+            f"чёрный экран; чтобы поток шёл у всех, включите перекодирование"
+        )
+    elif not result.video_ok:
         result.recommended_profile = StreamProfile.transcode.value
         result.notes.append(
-            f"видео в {result.video_codec.upper() or 'неизвестном кодеке'} — браузер такой поток "
-            f"по WebRTC не покажет, нужен транскод (примерно одно ядро CPU на камеру)"
+            f"видео в {result.video_codec.upper() or 'неизвестном кодеке'} — такой поток "
+            f"браузеры не играют, нужно перекодирование"
         )
     if not result.audio_ok:
         result.notes.append(
             f"звук в {result.audio_codec.upper()} — для WebRTC нужен транскод либо отключение звука"
         )
     if result.video_ok and result.audio_ok:
-        result.notes.append("поток совместим с WebRTC как есть, транскод не нужен")
+        result.notes.append("поток совместим с браузером как есть, перекодирование не нужно")
 
     return result

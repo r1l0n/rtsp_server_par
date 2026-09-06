@@ -29,6 +29,12 @@
   {% endfor %}
 </ul>
 
+{# H.265 играет не всякая машина, и ответ «а у меня-то покажет?» знает только
+   сам браузер. Заполняется panel.js; без скрипта строка просто не появится. #}
+{% if diagnosis.probe and diagnosis.probe.video_codec in ('h265', 'hevc') %}
+<p class="check-hint" data-hevc-check hidden></p>
+{% endif %}
+
 {% if diagnosis.raw %}
 <details class="raw">
   <summary>Полный вывод ffprobe</summary>

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 
 import pyotp
 import pytest
+from fastapi.responses import Response
 
 from app.auth import ratelimit, sessions
 from app.auth.passwords import (
@@ -15,6 +17,7 @@ from app.auth.passwords import (
     validate_password_policy,
     verify_password,
 )
+from app.auth.sessions import SessionData
 from app.auth.totp import (
     generate_recovery_codes,
     hash_recovery_code,
@@ -22,7 +25,9 @@ from app.auth.totp import (
     verify_code,
     verify_recovery_code,
 )
+from app.config import get_settings
 from app.web.auth_views import safe_next
+from app.web.templating import set_session_cookie
 
 
 # ─── Пароли ──────────────────────────────────────────────────────────────────
@@ -188,6 +193,92 @@ async def test_delete_all_keeps_current_session() -> None:
 async def test_unknown_session_id_returns_none() -> None:
     assert await sessions.load("не существует") is None
     assert await sessions.load(None) is None
+
+
+# ─── «Запомнить меня» ────────────────────────────────────────────────────────
+def _remember_seconds() -> int:
+    return get_settings().remember_me_days * 86400
+
+
+async def test_remember_me_extends_session_ttl(fake_redis) -> None:
+    ordinary = await sessions.create(uuid.uuid4())
+    long_lived = await sessions.create(uuid.uuid4(), remember=True)
+
+    assert await fake_redis.ttl(f"sess:{ordinary.sid}") == pytest.approx(
+        get_settings().session_ttl_minutes * 60, abs=5
+    )
+    assert await fake_redis.ttl(f"sess:{long_lived.sid}") == pytest.approx(
+        _remember_seconds(), abs=5
+    )
+
+    loaded = await sessions.load(long_lived.sid)
+    assert loaded is not None and loaded.remember and loaded.expires_at > time.time()
+
+
+async def test_pending_2fa_session_stays_short_but_keeps_the_flag(fake_redis) -> None:
+    """Окно ввода кода не должно жить месяц — дедлайн появляется после 2FA."""
+    pending = await sessions.create(uuid.uuid4(), pending_2fa=True, remember=True)
+    assert pending.expires_at == 0.0
+    assert await fake_redis.ttl(f"sess:{pending.sid}") == pytest.approx(
+        get_settings().session_ttl_minutes * 60, abs=5
+    )
+
+    fresh = await sessions.rotate(pending, pending_2fa=False)
+    assert fresh.remember and fresh.expires_at > time.time()
+    assert await fake_redis.ttl(f"sess:{fresh.sid}") == pytest.approx(_remember_seconds(), abs=5)
+
+
+async def test_touch_does_not_shrink_a_remembered_session(fake_redis) -> None:
+    session = await sessions.create(uuid.uuid4(), remember=True)
+    await sessions.touch(session)
+    assert await fake_redis.ttl(f"sess:{session.sid}") == pytest.approx(
+        _remember_seconds(), abs=5
+    )
+
+
+async def test_touch_never_pushes_past_the_deadline(fake_redis) -> None:
+    """Предел жёсткий: активность продлевает сессию только до даты входа + 30 дней."""
+    session = await sessions.create(uuid.uuid4(), remember=True)
+    session.expires_at = time.time() + 60  # как будто месяц почти истёк
+    await sessions.touch(session)
+    assert await fake_redis.ttl(f"sess:{session.sid}") == pytest.approx(60, abs=5)
+
+
+async def test_touch_keeps_the_user_index_alive(fake_redis) -> None:
+    """Индекс живёт не меньше самой долгой сессии, иначе профиль её теряет."""
+    user_id = uuid.uuid4()
+    long_lived = await sessions.create(user_id, remember=True)
+    ordinary = await sessions.create(user_id)
+
+    await sessions.touch(ordinary)  # короткая сессия не смеет обрезать индекс
+    assert await fake_redis.ttl(f"user_sess:{user_id}") == pytest.approx(
+        _remember_seconds(), abs=5
+    )
+    assert {s.sid for s in await sessions.list_for_user(user_id)} == {
+        long_lived.sid,
+        ordinary.sid,
+    }
+
+
+def test_session_cookie_lives_as_long_as_the_session() -> None:
+    ordinary = SessionData(
+        sid="a", user_id="u", csrf="c", created_at=0, last_seen=0, ip="", user_agent="",
+        pending_2fa=False,
+    )
+    remembered = SessionData(
+        sid="b", user_id="u", csrf="c", created_at=0, last_seen=0, ip="", user_agent="",
+        pending_2fa=False, remember=True, expires_at=time.time() + _remember_seconds(),
+    )
+
+    assert sessions.ttl_for(ordinary) == get_settings().session_ttl_minutes * 60
+    assert sessions.ttl_for(remembered) == pytest.approx(_remember_seconds(), abs=5)
+
+    response = Response()
+    set_session_cookie(response, remembered)
+    cookie = response.headers["set-cookie"]
+    max_age = int(re.search(r"Max-Age=(\d+)", cookie).group(1))  # type: ignore[union-attr]
+    assert max_age == pytest.approx(_remember_seconds(), abs=5)
+    assert "HttpOnly" in cookie and "SameSite=lax" in cookie
 
 
 # ─── Открытые редиректы ──────────────────────────────────────────────────────

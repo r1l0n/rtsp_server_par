@@ -207,6 +207,40 @@
     if (event.key === "Escape") close();
   });
 
+  // ── Умеет ли этот браузер H.265 ───────────────────────────────────────────
+  // Отчёт диагностики говорит про камеру и сервер, но зритель спрашивает про
+  // себя: «а у меня покажет?». Знает это только сам браузер — Chrome отдаёт
+  // H.265 в списке кодеков WebRTC лишь при наличии аппаратного декодера,
+  // а MSE отвечает на прямой вопрос про hvc1.
+  function hevcInWebrtc() {
+    if (!window.RTCRtpReceiver || !RTCRtpReceiver.getCapabilities) return null;
+    var caps = RTCRtpReceiver.getCapabilities("video");
+    if (!caps || !caps.codecs) return null;
+    return caps.codecs.some(function (codec) {
+      return /h265/i.test(codec.mimeType || "");
+    });
+  }
+
+  function hevcInHls() {
+    var source = window.ManagedMediaSource || window.MediaSource;
+    if (!source || !source.isTypeSupported) return null;
+    return source.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"');
+  }
+
+  function verdictWord(value) {
+    if (value === null) return "не удалось определить";
+    return value ? "покажет" : "не покажет";
+  }
+
+  document.querySelectorAll("[data-hevc-check]").forEach(function (node) {
+    var webrtc = hevcInWebrtc();
+    var hls = hevcInHls();
+    node.textContent =
+      "Браузер, в котором вы это читаете: по WebRTC " + verdictWord(webrtc) +
+      ", по HLS " + verdictWord(hls) + ". У других зрителей может быть иначе.";
+    node.hidden = false;
+  });
+
   // ── Фильтр списка ─────────────────────────────────────────────────────────
   // Список камер редко бывает длинным, поэтому фильтр честно клиентский:
   // серверный поиск потребовал бы перезагрузки страницы на каждую букву.

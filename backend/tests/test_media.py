@@ -177,14 +177,23 @@ def test_h264_with_g711_needs_no_transcode() -> None:
     assert result.height == 1080
 
 
-def test_h265_requires_transcode() -> None:
+def test_h265_plays_only_with_a_hardware_decoder() -> None:
+    """Перекодирование не навязываем: на машине с железом поток пойдёт как есть."""
     result = _interpret(
         [{"codec_type": "video", "codec_name": "hevc", "width": 2560, "height": 1440,
           "r_frame_rate": "20/1"}]
     )
     assert not result.video_ok
+    assert result.video_hw_only
+    assert result.recommended_profile == StreamProfile.passthrough.value
+    assert any("аппаратным" in note for note in result.notes)
+
+
+def test_codec_no_browser_plays_still_recommends_transcode() -> None:
+    result = _interpret([{"codec_type": "video", "codec_name": "mjpeg", "r_frame_rate": "10/1"}])
+    assert not result.video_ok
+    assert not result.video_hw_only
     assert result.recommended_profile == StreamProfile.transcode.value
-    assert any("WebRTC" in note for note in result.notes)
 
 
 def test_aac_audio_is_flagged() -> None:

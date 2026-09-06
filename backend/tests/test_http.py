@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth.sessions import SESSION_COOKIE
+from app.config import get_settings
 from app.main import app
 
 
@@ -69,6 +70,12 @@ def test_forgot_page_is_open_to_anonymous(client: TestClient) -> None:
 
 def test_login_page_offers_password_recovery(client: TestClient) -> None:
     assert 'href="/forgot"' in client.get("/login").text
+
+
+def test_login_page_offers_remember_me(client: TestClient) -> None:
+    body = client.get("/login").text
+    assert 'name="remember"' in body
+    assert str(get_settings().remember_me_days) in body
 
 
 def test_invalid_session_cookie_is_not_fatal(client: TestClient) -> None:
