@@ -92,7 +92,8 @@
            ticket='/cameras/' ~ camera.id ~ '/live/ticket',
            audio=camera.audio_enabled,
            poster='/cameras/' ~ camera.id ~ '/snapshot.jpg',
-           title=camera.name) }}
+           title=camera.name,
+           ptz=('/cameras/' ~ camera.id ~ '/ptz') if camera.ptz_enabled else '') }}
     </div>
   </div>
   {% endif %}

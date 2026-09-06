@@ -55,6 +55,12 @@ LINK_DELETED = "link.deleted"
 LINK_VIEWED = "link.viewed"
 LINK_DENIED = "link.denied"
 
+#: Один сеанс управления обзором, а не каждое нажатие стрелки: за одну
+#: наводку камеры их набегает несколько десятков, и журнал превратился бы
+#: в поток, в котором не найти ничего другого.
+PTZ_CONTROL = "ptz.control"
+PTZ_DENIED = "ptz.denied"
+
 
 async def record(
     session: AsyncSession,

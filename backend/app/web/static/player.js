@@ -469,6 +469,170 @@
         });
     }
 
+    // ── Пульт управления обзором ────────────────────────────────────────────
+    // Кнопку держат — команда повторяется: каждая действует пару секунд, и
+    // камера останавливается сама, если браузер замолчал. Поэтому отпущенная
+    // кнопка шлёт «стоп», но потеря связи камеру не заклинивает.
+    var ptzEl = root.querySelector(".player-ptz");
+    var ptzUrl = ptzEl ? ptzEl.dataset.ptz || "" : "";
+    var ptzNote = ptzEl ? ptzEl.querySelector(".player-ptz-note") : null;
+    var ptzKeys = ptzEl ? ptzEl.querySelectorAll(".player-ptz-key") : [];
+    var ptzHeld = null;
+    var ptzTimer = null;
+    var ptzHeartbeat = 700;
+    var ptzLockTimer = null;
+
+    function ptzSay(text) {
+      if (!ptzNote) return;
+      ptzNote.textContent = text || "";
+      ptzNote.hidden = !text;
+      root.classList.toggle("has-ptz-note", Boolean(text));
+    }
+
+    function ptzLock(retryAfterMs) {
+      if (!ptzEl) return;
+      ptzEl.classList.add("is-locked");
+      ptzSay("Камерой управляет другой зритель.");
+      clearTimeout(ptzLockTimer);
+      ptzLockTimer = setTimeout(function () {
+        ptzEl.classList.remove("is-locked");
+        ptzSay("");
+      }, Math.min(Math.max(retryAfterMs || 1000, 1000), 30000));
+    }
+
+    function ptzSend(payload, keepalive) {
+      if (!ptzUrl) return Promise.resolve();
+      var headers = {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        // Кросс-доменный скрипт этот заголовок без preflight не поставит, а
+        // CORS мы не разрешаем — так публичный пульт закрыт от чужой страницы.
+        "X-Requested-With": "fetch"
+      };
+      var token = csrfToken();
+      if (token) headers["X-CSRF-Token"] = token;
+
+      return fetch(ptzUrl, {
+        method: "POST",
+        headers: headers,
+        body: JSON.stringify(payload),
+        credentials: "same-origin",
+        cache: "no-store",
+        keepalive: Boolean(keepalive)
+      }).then(function (response) {
+        if (response.status === 409) {
+          return response.json().then(function (data) {
+            ptzLock(data.retry_after_ms);
+          });
+        }
+        if (response.status === 403) {
+          if (ptzEl) ptzEl.hidden = true;
+          return null;
+        }
+        if (!response.ok) {
+          return response
+            .json()
+            .catch(function () {
+              return {};
+            })
+            .then(function (data) {
+              ptzSay(data.error || "Камера не приняла команду.");
+            });
+        }
+        return response.json().then(function (data) {
+          if (data && data.heartbeat_ms) ptzHeartbeat = data.heartbeat_ms;
+          ptzSay("");
+        });
+      }).catch(function () {
+        /* сеть моргнула — следующее нажатие попробует снова */
+      });
+    }
+
+    function ptzPress(direction) {
+      if (!ptzUrl || ptzHeld === direction) return;
+      if (ptzEl && ptzEl.classList.contains("is-locked")) return;
+      ptzRelease(false);
+      ptzHeld = direction;
+      Array.prototype.forEach.call(ptzKeys, function (key) {
+        if (key.dataset.dir === direction) key.classList.add("is-down");
+      });
+      ptzSend({ action: "move", direction: direction });
+      ptzTimer = setInterval(function () {
+        ptzSend({ action: "move", direction: direction });
+      }, ptzHeartbeat);
+    }
+
+    function ptzRelease(notify, keepalive) {
+      clearInterval(ptzTimer);
+      ptzTimer = null;
+      Array.prototype.forEach.call(ptzKeys, function (key) {
+        key.classList.remove("is-down");
+      });
+      if (!ptzHeld) return;
+      ptzHeld = null;
+      if (notify !== false) ptzSend({ action: "stop" }, keepalive);
+    }
+
+    Array.prototype.forEach.call(ptzKeys, function (key) {
+      key.addEventListener("pointerdown", function (event) {
+        event.preventDefault();
+        // Захват указателя: иначе палец, соскользнувший с кнопки, никогда не
+        // пришлёт pointerup — и камера уедет до упора.
+        if (key.setPointerCapture) key.setPointerCapture(event.pointerId);
+        ptzPress(key.dataset.dir);
+      });
+      key.addEventListener("pointerup", function () {
+        ptzRelease(true);
+      });
+      key.addEventListener("pointercancel", function () {
+        ptzRelease(true);
+      });
+      key.addEventListener("lostpointercapture", function () {
+        ptzRelease(true);
+      });
+      // Долгое нажатие на Android иначе открывает контекстное меню.
+      key.addEventListener("contextmenu", function (event) {
+        event.preventDefault();
+      });
+    });
+
+    var PTZ_BY_KEY = {
+      ArrowUp: "up",
+      ArrowDown: "down",
+      ArrowLeft: "left",
+      ArrowRight: "right",
+      "+": "zoom_in",
+      "=": "zoom_in",
+      "-": "zoom_out",
+      _: "zoom_out"
+    };
+
+    function ptzOwnsKeyboard() {
+      if (!ptzUrl || !running) return false;
+      var active = document.activeElement;
+      if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return false;
+      if (active && active.isContentEditable) return false;
+      // Стрелки достаются плееру, внутри которого фокус; если фокуса нет —
+      // единственному играющему плееру с пультом на странице.
+      if (root.contains(active)) return true;
+      return document.querySelectorAll(".player.is-playing .player-ptz").length === 1;
+    }
+
+    document.addEventListener("keydown", function (event) {
+      var direction = PTZ_BY_KEY[event.key];
+      if (!direction || event.repeat || !ptzOwnsKeyboard()) return;
+      event.preventDefault();
+      ptzPress(direction);
+    });
+
+    document.addEventListener("keyup", function (event) {
+      if (PTZ_BY_KEY[event.key] && ptzHeld) ptzRelease(true);
+    });
+
+    window.addEventListener("blur", function () {
+      ptzRelease(true);
+    });
+
     // ── Управление ──────────────────────────────────────────────────────────
     function start() {
       if (running) return;
@@ -477,6 +641,7 @@
       root.classList.add("is-playing");
       if (posterEl) posterEl.hidden = true;
       if (stopBtn) stopBtn.hidden = false;
+      if (ptzEl) ptzEl.hidden = !ptzUrl;
       setStatus("Подключение…");
 
       fetchTicket()
@@ -494,6 +659,11 @@
     }
 
     function stop() {
+      // Стоп с keepalive: браузер обязан дослать его, даже если вкладку
+      // закрывают прямо сейчас (сюда приходит обработчик pagehide).
+      ptzRelease(true, true);
+      if (ptzEl) ptzEl.hidden = true;
+      ptzSay("");
       running = false;
       clearInterval(ticketTimer);
       teardown();

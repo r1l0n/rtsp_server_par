@@ -7,7 +7,7 @@ import secrets
 from typing import Annotated
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,10 +17,21 @@ from ..auth.deps import DbSession
 from ..auth.passwords import verify_password
 from ..config import get_settings
 from ..crypto import hash_token, tokens_equal
-from ..internal.authz import VIEW_COOKIE, count_viewers, grant, ip_allowed, new_viewer_id
+from ..internal.authz import (
+    VIEW_COOKIE,
+    count_viewers,
+    grant,
+    ip_allowed,
+    link_is_valid,
+    new_viewer_id,
+)
 from ..logging_setup import get_logger
 from ..middleware import client_ip
 from ..models import Camera, ShareLink, ViewSession
+from ..ptz import service as ptz
+from ..ptz.lock import viewer_holder
+from ..redis_client import get_redis
+from .panel_views import ptz_response
 from .templating import render
 
 log = get_logger("public")
@@ -104,6 +115,11 @@ async def _open_stream(
         whep_url=f"/whep/{camera.mtx_path}/whep",
         hls_url=f"/hls/{camera.mtx_path}/index.m3u8",
         audio_enabled=camera.audio_enabled,
+        # Пульт появляется только когда сошлось и то, и другое: камера умеет
+        # поворачиваться и владелец разрешил это конкретной ссылкой.
+        ptz_url=(
+            f"/v/{link.slug}/ptz" if camera.ptz_enabled and link.ptz_allowed else ""
+        ),
     )
     response.set_cookie(
         VIEW_COOKIE,
@@ -179,6 +195,76 @@ async def _view(
         )
 
     return await _open_stream(request, db, link, camera, embed=embed)
+
+
+@router.post("/v/{slug}/ptz")
+async def view_ptz(request: Request, db: DbSession, slug: str) -> JSONResponse:
+    """Команда пульта у зрителя публичной ссылки.
+
+    Токена в запросе нет — он участвует только в первом открытии страницы.
+    Право на управление выводится из того же гранта в Redis, которым живут
+    медиа-запросы: cookie зрителя → путь MediaMTX → идентификатор ссылки.
+
+    CSRF-токена на публичной странице взяться неоткуда — сессии у зрителя
+    нет. Межсайтовый вызов закрыт с трёх сторон: cookie доступа помечена
+    SameSite=Lax и в стороннем POST не отправляется; тело идёт как JSON,
+    что заставляет браузер сначала спросить preflight, а CORS мы не
+    разрешаем вовсе; плюс требуется заголовок X-Requested-With, который
+    чужая страница без preflight поставить не может.
+    """
+    if request.headers.get("x-requested-with") != "fetch":
+        return JSONResponse({"error": GENERIC_DENIED}, status_code=403)
+
+    viewer_id = request.cookies.get(VIEW_COOKIE)
+    if not viewer_id:
+        return JSONResponse({"error": GENERIC_DENIED}, status_code=403)
+
+    link = await db.scalar(select(ShareLink).where(ShareLink.slug == slug))
+    if link is None or not link.ptz_allowed:
+        return JSONResponse({"error": GENERIC_DENIED}, status_code=403)
+
+    camera = await db.get(Camera, link.camera_id)
+    if camera is None or not camera.is_enabled or not camera.ptz_enabled:
+        return JSONResponse({"error": "Камера недоступна."}, status_code=409)
+
+    granted = await get_redis().hget(f"viewer:{viewer_id}", camera.mtx_path)
+    if granted != str(link.id):
+        return JSONResponse({"error": GENERIC_DENIED}, status_code=403)
+    if not await link_is_valid(link.id):
+        return JSONResponse({"error": GENERIC_DENIED}, status_code=403)
+
+    ip = client_ip(request)
+    if not ip_allowed(ip, list(link.allowed_cidrs or [])):
+        return JSONResponse({"error": GENERIC_DENIED}, status_code=403)
+
+    holder = viewer_holder(viewer_id)
+    limited = await ratelimit.hit("ptz", holder, ratelimit.PTZ_BY_HOLDER)
+    if not limited.allowed:
+        return JSONResponse(
+            {"error": "Слишком много команд."}, status_code=429,
+            headers={"Retry-After": str(limited.retry_after)},
+        )
+
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = {}
+    action = str(payload.get("action", "move"))
+    direction = str(payload.get("direction", ""))
+
+    if action == "stop":
+        await ptz.release(camera, holder)
+        return JSONResponse({"ok": True})
+
+    if await ptz.should_audit(camera.id, holder):
+        await audit.record(
+            db, audit.PTZ_CONTROL, target_type="link", target_id=str(link.id), ip=ip,
+            user_agent=request.headers.get("user-agent", ""),
+            meta={"camera_id": str(camera.id), "source": "link"},
+        )
+        await db.commit()
+
+    return ptz_response(await ptz.press(camera, direction, holder))
 
 
 @router.post("/v/{slug}", response_class=HTMLResponse)

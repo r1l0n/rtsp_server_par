@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     allow_private_camera_hosts: bool = False
     camera_host_allowlist: str = ""
 
+    # --- Управление обзором (PTZ) --------------------------------------------
+    #: Сколько камера двигается по одной команде, если следующая не пришла.
+    #: Это же значение — дедлайн сторожа, который шлёт «стоп» за камеру,
+    #: не умеющую останавливаться сама.
+    ptz_move_seconds: float = 2.0
+    #: Как долго управление держится за тем, кто нажал первым.
+    ptz_hold_seconds: int = 15
+    ptz_http_timeout_seconds: float = 4.0
+
     # --- Тайминги ------------------------------------------------------------
     reconcile_interval_seconds: int = 15
     authz_cache_seconds: int = 20

@@ -32,6 +32,9 @@ RESET_BY_IP = Limit(limit=5, window=900)
 RESET_BY_ACCOUNT = Limit(limit=3, window=900)
 #: Открытие публичной ссылки: защита от перебора slug/токена.
 PUBLIC_VIEW_BY_IP = Limit(limit=120, window=60)
+#: Пульт шлёт команду примерно раз в 700 мс, пока кнопку держат, поэтому
+#: лимит высокий: он ловит скрипт, а не живого человека со стрелками.
+PTZ_BY_HOLDER = Limit(limit=240, window=60)
 #: Ввод пароля к защищённой ссылке.
 LINK_PASSWORD_BY_IP = Limit(limit=10, window=600)
 #: Открытие ссылки-приглашения: защита от перебора токенов.

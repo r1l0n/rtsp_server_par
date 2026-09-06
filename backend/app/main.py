@@ -20,6 +20,8 @@ from .internal import authz
 from .logging_setup import configure_logging, get_logger
 from .media.mtx_client import close_mtx, get_mtx
 from .middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from .ptz.service import shutdown as ptz_shutdown
+from .ptz.transport import close_client as close_ptz_client
 from .redis_client import close_redis, get_redis
 from .web import (
     admin_views,
@@ -48,6 +50,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        # Сторожа PTZ снимаем первыми: они могут держать HTTP-клиент, который
+        # закрывается следующей строкой.
+        await ptz_shutdown()
+        await close_ptz_client()
         await close_mtx()
         await close_redis()
         await dispose_engine()

@@ -137,6 +137,66 @@
   border-color: color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
+/* ── Пульт управления обзором ──────────────────────────────────────────── */
+/* Живёт поверх кадра справа, над панелью. Своих цветовых токенов не заводит:
+   каждый новый токен пришлось бы объявить ещё и в двух блоках светлой темы
+   (их сверяет tests/test_styles.py), а пульт всегда лежит на чёрном кадре. */
+.player-ptz {
+  position: absolute;
+  right: var(--space-3);
+  bottom: 52px;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.player:hover .player-ptz,
+.player:focus-within .player-ptz,
+.player.has-ptz-note .player-ptz { opacity: 1; }
+
+/* Крестовина: стрелки стоят по сторонам света, центр пустой. */
+.player-ptz-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 34px);
+  grid-template-rows: repeat(2, 34px);
+  gap: 2px;
+}
+.player-ptz-pad .player-ptz-key:nth-child(1) { grid-area: 1 / 2; }
+.player-ptz-pad .player-ptz-key:nth-child(2) { grid-area: 2 / 1; }
+.player-ptz-pad .player-ptz-key:nth-child(3) { grid-area: 2 / 3; }
+.player-ptz-pad .player-ptz-key:nth-child(4) { grid-area: 2 / 2; }
+
+.player-ptz-zoom { display: flex; flex-direction: column; gap: 2px; }
+
+.player-ptz-key {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  /* Без touch-action удержание стрелки на телефоне прокручивает страницу,
+     а без user-select — выделяет текст и открывает контекстное меню. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.player-ptz-key .i { width: 18px; height: 18px; }
+.player-ptz-key.is-down {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 75%, transparent);
+}
+.player-ptz.is-locked .player-ptz-key { opacity: 0.4; pointer-events: none; }
+
+.player-ptz-note {
+  max-width: 190px;
+  margin: 0 0 2px;
+  padding: 5px 8px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, #000 70%, transparent);
+  color: var(--neutral-200);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 /* ── Обёртки ───────────────────────────────────────────────────────────── */
 body.player-page {
   margin: 0;

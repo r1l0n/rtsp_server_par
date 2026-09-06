@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import audit
+from ..auth import ratelimit
 from ..auth.deps import CsrfProtected, CurrentUser, DbSession, Forbidden
 from ..auth.passwords import hash_password
 from ..config import get_settings
@@ -38,7 +39,10 @@ from ..media.paths import new_mtx_path
 from ..media.reconciler import drop_path, push_camera
 from ..media.ssrf import UnsafeCameraUrl, validate_rtsp_url
 from ..middleware import client_ip
-from ..models import Camera, CameraStatus, Role, ShareLink, StreamProfile, User
+from ..models import Camera, CameraStatus, PtzDriver, Role, ShareLink, StreamProfile, User
+from ..ptz import service as ptz
+from ..ptz.base import PtzError
+from ..ptz.lock import panel_holder
 from .templating import notice, redirect, render
 
 log = get_logger("panel")
@@ -309,6 +313,14 @@ async def camera_update(
     audio_enabled: Annotated[str, Form()] = "",
     profile: Annotated[str, Form()] = StreamProfile.passthrough.value,
     is_enabled: Annotated[str, Form()] = "",
+    ptz_enabled: Annotated[str, Form()] = "",
+    ptz_driver: Annotated[str, Form()] = PtzDriver.auto.value,
+    ptz_port: Annotated[str, Form()] = "",
+    ptz_tls: Annotated[str, Form()] = "",
+    ptz_channel: Annotated[str, Form()] = "1",
+    ptz_username: Annotated[str, Form()] = "",
+    ptz_password: Annotated[str, Form()] = "",
+    ptz_credentials_clear: Annotated[str, Form()] = "",
 ) -> Response:
     camera = await _get_camera(db, camera_id, user)
 
@@ -337,6 +349,20 @@ async def camera_update(
         camera.port = target.port
         camera.probed_at = None  # перепроба на следующем цикле worker'а
         changed["rtsp_url"] = target.display_url
+
+    _apply_ptz_form(
+        camera,
+        enabled=ptz_enabled,
+        driver=ptz_driver,
+        port=ptz_port,
+        tls=ptz_tls,
+        channel=ptz_channel,
+        username=ptz_username,
+        password=ptz_password,
+        clear_credentials=ptz_credentials_clear,
+    )
+    # Логин и пароль камеры в журнал не попадают — только сам факт.
+    changed["ptz"] = camera.ptz_enabled
 
     await audit.record(
         db, audit.CAMERA_UPDATED, actor_id=user.id, target_type="camera",
@@ -555,6 +581,9 @@ async def camera_live(
         whep_url=f"/whep/{camera.mtx_path}/whep",
         hls_url=f"/hls/{camera.mtx_path}/index.m3u8",
         audio_enabled=camera.audio_enabled,
+        # Здесь ходит вошедший оператор, поэтому пульт бьёт в маршрут панели:
+        # CSRF-токен на этой странице есть — он приходит из его сессии.
+        ptz_url=f"/cameras/{camera.id}/ptz" if camera.ptz_enabled else "",
     )
     _set_view_cookie(response, viewer_id)
     return response
@@ -567,6 +596,156 @@ async def camera_snapshot(db: DbSession, user: CurrentUser, camera_id: uuid.UUID
     if not path.exists():
         return Response(status_code=404)
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "max-age=60"})
+
+
+# ─── Управление обзором (PTZ) ────────────────────────────────────────────────
+def _int_or(raw: str, fallback: int) -> int:
+    try:
+        return int(raw.strip())
+    except (ValueError, AttributeError):
+        return fallback
+
+
+def _apply_ptz_form(
+    camera: Camera,
+    *,
+    enabled: str,
+    driver: str,
+    port: str,
+    tls: str,
+    channel: str,
+    username: str,
+    password: str,
+    clear_credentials: str,
+) -> None:
+    """Переносит поля формы в камеру и сбрасывает кэш опознания при нужде.
+
+    Кэш обязан сбрасываться: в нём лежат вендор, токен профиля ONVIF и путь
+    службы, добытые для ПРЕЖНЕГО адреса и прежнего пользователя. Оставить
+    его после смены порта — значит стучаться токеном от другой камеры и
+    получать невнятный отказ вместо повторного опознания.
+    """
+    before = (camera.ptz_driver, camera.ptz_port, camera.ptz_tls, camera.ptz_channel)
+
+    camera.ptz_enabled = enabled == "on"
+    if driver in {item.value for item in PtzDriver}:
+        camera.ptz_driver = driver
+    camera.ptz_tls = tls == "on"
+
+    raw_port = _int_or(port, 0)
+    camera.ptz_port = raw_port if 1 <= raw_port <= 65535 else None
+    camera.ptz_channel = max(1, min(_int_or(channel, 1), 255))
+
+    credentials_changed = False
+    if clear_credentials == "on":
+        credentials_changed = camera.ptz_credentials_enc is not None
+        camera.ptz_credentials_enc = None
+    elif username.strip() or password:
+        camera.ptz_credentials_enc = ptz.pack_credentials(username.strip(), password)
+        credentials_changed = True
+
+    if credentials_changed or before != (
+        camera.ptz_driver, camera.ptz_port, camera.ptz_tls, camera.ptz_channel
+    ):
+        camera.ptz_meta = None
+        camera.ptz_checked_at = None
+
+
+@router.post("/cameras/{camera_id}/ptz/check", response_class=HTMLResponse)
+async def camera_ptz_check(
+    request: Request, db: DbSession, user: CurrentUser, _: CsrfProtected, camera_id: uuid.UUID
+) -> HTMLResponse:
+    """Опознание камеры по кнопке — синхронно, как и диагностика.
+
+    Камеру не двигает: проверяется, что до неё есть доступ и что протокол
+    управления понят. Само движение оператор проверяет пультом — так он
+    сразу видит и направление осей.
+    """
+    camera = await _get_camera(db, camera_id, user)
+
+    report: dict[str, str] = {}
+    try:
+        info = await ptz.detect(camera)
+    except (PtzError, UnsafeCameraUrl, DecryptionError) as exc:
+        report = {"state": "fail", "message": str(exc)}
+    else:
+        ptz.store_detection(camera, info)
+        camera.ptz_enabled = True
+        camera.ptz_driver = info.driver
+        report = {
+            "state": "ok",
+            "message": f"{info.detail}{f' · {info.model}' if info.model else ''}",
+        }
+        await audit.record(
+            db, audit.CAMERA_UPDATED, actor_id=user.id, target_type="camera",
+            target_id=str(camera.id), ip=client_ip(request),
+            meta={"ptz_driver": info.driver},
+        )
+        await db.commit()
+
+    return await _render_detail(request, db, user, camera, ptz_report=report)
+
+
+@router.post("/cameras/{camera_id}/ptz")
+async def camera_ptz(
+    request: Request,
+    db: DbSession,
+    user: CurrentUser,
+    _: CsrfProtected,
+    camera_id: uuid.UUID,
+    action: Annotated[str, Form()] = "move",
+    direction: Annotated[str, Form()] = "",
+) -> JSONResponse:
+    """Команда пульта из панели.
+
+    Права ровно те же, что на просмотр камеры: `_get_camera` пускает
+    администратора ко всем камерам, остальных — к своим. Отдельной роли для
+    поворота нет намеренно: тот, кому показали живой кадр, всё равно видит
+    всё, что видно камере.
+    """
+    camera = await _get_camera(db, camera_id, user)
+    if not camera.ptz_enabled:
+        return JSONResponse({"error": "Управление обзором у камеры выключено."}, status_code=403)
+    if not camera.is_enabled:
+        return JSONResponse({"error": "Камера выключена."}, status_code=409)
+
+    holder = panel_holder(user.id)
+    limited = await ratelimit.hit("ptz", holder, ratelimit.PTZ_BY_HOLDER)
+    if not limited.allowed:
+        return JSONResponse(
+            {"error": "Слишком много команд."}, status_code=429,
+            headers={"Retry-After": str(limited.retry_after)},
+        )
+
+    if action == "stop":
+        await ptz.release(camera, holder)
+        return JSONResponse({"ok": True})
+
+    if await ptz.should_audit(camera.id, holder):
+        await audit.record(
+            db, audit.PTZ_CONTROL, actor_id=user.id, target_type="camera",
+            target_id=str(camera.id), ip=client_ip(request), meta={"source": "panel"},
+        )
+        await db.commit()
+
+    return ptz_response(await ptz.press(camera, direction, holder))
+
+
+def ptz_response(result: ptz.Result) -> JSONResponse:
+    """Общий формат ответа пульту — одинаковый в панели и по ссылке."""
+    if result.ok:
+        return JSONResponse({"ok": True, "heartbeat_ms": result.heartbeat_ms})
+    if result.reason == "busy":
+        return JSONResponse(
+            {
+                "error": result.message,
+                "locked": True,
+                "retry_after_ms": result.retry_after_ms,
+                "heartbeat_ms": result.heartbeat_ms,
+            },
+            status_code=409,
+        )
+    return JSONResponse({"error": result.message}, status_code=502)
 
 
 # ─── Публичные ссылки ────────────────────────────────────────────────────────
@@ -582,6 +761,7 @@ async def link_create(
     max_concurrent: Annotated[int, Form()] = 0,
     allowed_cidrs: Annotated[str, Form()] = "",
     link_password: Annotated[str, Form()] = "",
+    ptz_allowed: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     camera = await _get_camera(db, camera_id, user)
 
@@ -600,6 +780,9 @@ async def link_create(
         max_concurrent=max(0, min(max_concurrent, 10_000)),
         allowed_cidrs=[c.strip() for c in allowed_cidrs.split(",") if c.strip()],
         password_hash=hash_password(link_password) if link_password else None,
+        # Галочка на ссылке не может включить PTZ у камеры, где его нет:
+        # подделанная форма не должна давать больше, чем показывает панель.
+        ptz_allowed=(ptz_allowed == "on") and camera.ptz_enabled,
         created_by_id=user.id,
     )
     db.add(link)
@@ -613,6 +796,7 @@ async def link_create(
             "expires_at": expires_at.isoformat() if expires_at else None,
             "has_password": bool(link_password),
             "cidrs": link.allowed_cidrs,
+            "ptz": link.ptz_allowed,
         },
     )
     await db.commit()

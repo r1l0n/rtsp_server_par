@@ -63,7 +63,8 @@
            ticket='/cameras/' ~ camera.id ~ '/live/ticket',
            audio=camera.audio_enabled,
            poster='/cameras/' ~ camera.id ~ '/snapshot.jpg',
-           title=camera.name) }}
+           title=camera.name,
+           ptz=('/cameras/' ~ camera.id ~ '/ptz') if camera.ptz_enabled else '') }}
 
       <div class="card-strip">
         <dl class="kv">
@@ -191,7 +192,95 @@
             <span class="muted small">в работе</span>
           </label>
         </div>
+
+        <fieldset>
+          <legend>Управление обзором</legend>
+          <label class="check">
+            <input type="checkbox" name="ptz_enabled" {% if camera.ptz_enabled %}checked{% endif %}>
+            <span>Разрешить поворачивать камеру
+              <span class="hint">Пульт появится в просмотре здесь и — если отметить это
+                при выдаче — у зрителей публичной ссылки.</span>
+            </span>
+          </label>
+
+          <div class="field-row tight">
+            <div class="field">
+              <label for="ptz-driver">Протокол</label>
+              <select id="ptz-driver" name="ptz_driver">
+                <option value="auto" {% if camera.ptz_driver == 'auto' %}selected{% endif %}>
+                  Определить автоматически</option>
+                <option value="onvif" {% if camera.ptz_driver == 'onvif' %}selected{% endif %}>
+                  ONVIF</option>
+                <option value="hikvision" {% if camera.ptz_driver == 'hikvision' %}selected{% endif %}>
+                  Hikvision ISAPI</option>
+                <option value="dahua" {% if camera.ptz_driver == 'dahua' %}selected{% endif %}>
+                  Dahua CGI</option>
+                <option value="axis" {% if camera.ptz_driver == 'axis' %}selected{% endif %}>
+                  Axis VAPIX</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="ptz-port">HTTP-порт камеры</label>
+              <input id="ptz-port" type="number" name="ptz_port" min="1" max="65535"
+                     placeholder="80" value="{{ camera.ptz_port or '' }}">
+            </div>
+            <div class="field">
+              <label for="ptz-channel">Канал</label>
+              <input id="ptz-channel" type="number" name="ptz_channel" min="1" max="255"
+                     value="{{ camera.ptz_channel }}">
+            </div>
+          </div>
+
+          <label class="check">
+            <input type="checkbox" name="ptz_tls" {% if camera.ptz_tls %}checked{% endif %}>
+            <span>Подключаться по HTTPS
+              <span class="hint">Нужно, если камера принимает только базовую
+                аутентификацию: по открытому HTTP пароль от неё мы не отправляем.</span>
+            </span>
+          </label>
+
+          <div class="field-row tight">
+            <div class="field">
+              <label for="ptz-login">Логин для управления</label>
+              <input id="ptz-login" type="text" name="ptz_username" autocomplete="off"
+                     placeholder="как в RTSP-ссылке">
+            </div>
+            <div class="field">
+              <label for="ptz-password">Пароль для управления</label>
+              <input id="ptz-password" type="password" name="ptz_password"
+                     autocomplete="new-password" placeholder="оставьте пустым — не менять">
+            </div>
+          </div>
+          {% if camera.ptz_credentials_enc %}
+          <label class="check">
+            <input type="checkbox" name="ptz_credentials_clear">
+            <span>Вернуться к учётным данным из RTSP-ссылки
+              <span class="hint">Сейчас для управления заведён отдельный пользователь.</span>
+            </span>
+          </label>
+          {% endif %}
+        </fieldset>
       </form>
+
+      {# Отдельная форма, а не кнопка внутри настроек: опознание идёт к камере
+         и занимает секунды, а сохранение настроек должно быть мгновенным. #}
+      <form method="post" action="/cameras/{{ camera.id }}/ptz/check">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-secondary" data-busy="Ищу управление…">
+          <svg class="i" aria-hidden="true"><use href="#i-pulse"></use></svg>Проверить управление
+        </button>
+        {% if camera.ptz_meta and camera.ptz_meta.driver %}
+        <span class="muted small">
+          определено: {{ camera.ptz_meta.detail or camera.ptz_meta.driver }}{% if camera.ptz_checked_at %},
+          {{ camera.ptz_checked_at|dt }}{% endif %}
+        </span>
+        {% endif %}
+      </form>
+      {% if ptz_report %}
+      <div class="alert {{ 'alert-ok' if ptz_report.state == 'ok' else 'alert-error' }}">
+        {{ ptz_report.message }}
+      </div>
+      {% endif %}
 
       <form method="post" action="/cameras/{{ camera.id }}/delete" class="danger-zone"
             data-confirm="Удалить камеру «{{ camera.name }}» вместе со всеми ссылками?">
@@ -231,6 +320,7 @@
           · {{ link.view_count }} просмотров
           {%- if link.password_hash %} · пароль{% endif %}
           {%- if link.allowed_cidrs %} · IP-фильтр{% endif %}
+          {%- if link.ptz_allowed %} · управление обзором{% endif %}
         </div>
         <div class="row-actions row-actions-left">
           <form method="post" action="/links/{{ link.id }}/rotate" class="inline"
@@ -307,6 +397,21 @@
           <span class="hint">спросим при открытии</span>
         </div>
       </div>
+
+      <label class="check">
+        <input type="checkbox" name="ptz_allowed"
+               {% if not camera.ptz_enabled %}disabled{% endif %}>
+        <span>Возможность управления обзором
+          <span class="hint">
+            {%- if camera.ptz_enabled -%}
+            Зритель сможет поворачивать камеру стрелками и менять зум.
+            {%- else -%}
+            Недоступно: у этой камеры не настроено управление обзором.
+            {%- endif -%}
+          </span>
+        </span>
+      </label>
+
       <div class="dialog-actions">
         <button type="button" class="btn btn-secondary" data-dialog-close>Отмена</button>
         <button type="submit" class="btn btn-primary">

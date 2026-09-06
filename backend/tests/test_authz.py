@@ -26,7 +26,7 @@ def allow_all_links(monkeypatch: pytest.MonkeyPatch):
     async def always_valid(link_id: uuid.UUID) -> bool:
         return True
 
-    monkeypatch.setattr(authz, "_link_is_valid", always_valid)
+    monkeypatch.setattr(authz, "link_is_valid", always_valid)
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def deny_all_links(monkeypatch: pytest.MonkeyPatch):
     async def never_valid(link_id: uuid.UUID) -> bool:
         return False
 
-    monkeypatch.setattr(authz, "_link_is_valid", never_valid)
+    monkeypatch.setattr(authz, "link_is_valid", never_valid)
 
 
 def _client():

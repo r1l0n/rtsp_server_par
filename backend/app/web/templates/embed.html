@@ -5,9 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <meta name="robots" content="noindex, nofollow">
+  {# Для зрителя по ссылке пусто — сессии у него нет. Заполняется, когда эту
+     же страницу открывает вошедший оператор через /cameras/<id>/live. #}
+  {% if csrf_token %}<meta name="csrf-token" content="{{ csrf_token }}">{% endif %}
   <title>{{ camera_name }}</title>
-  <link rel="stylesheet" href="/static/app.css">
-  <link rel="stylesheet" href="/static/player.css">
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_v }}">
+  <link rel="stylesheet" href="/static/player.css?v={{ asset_v }}">
 </head>
 <body class="player-page embed">
   {% include "_icons.html" %}
@@ -21,6 +24,6 @@
        autostart=true,
        inline=false,
        show_stop=false) }}
-  <script src="/static/player.js" defer></script>
+  <script src="/static/player.js?v={{ asset_v }}" defer></script>
 </body>
 </html>

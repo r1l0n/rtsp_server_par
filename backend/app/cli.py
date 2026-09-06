@@ -121,8 +121,17 @@ async def _rotate_key(new_key_b64: str) -> None:
 
     async with get_sessionmaker()() as session:
         cameras = list(await session.scalars(select(Camera)))
+        ptz_count = 0
         for camera in cameras:
             camera.rtsp_url_enc = new_cipher.encrypt(old_cipher.decrypt(camera.rtsp_url_enc))
+            # Учётные данные PTZ шифруются тем же ключом. Забыть их здесь —
+            # значит после ротации молча потерять управление всеми камерами,
+            # у которых заведён отдельный логин для поворота.
+            if camera.ptz_credentials_enc is not None:
+                camera.ptz_credentials_enc = new_cipher.encrypt(
+                    old_cipher.decrypt(camera.ptz_credentials_enc)
+                )
+                ptz_count += 1
 
         users = list(await session.scalars(select(User).where(User.totp_secret_enc.is_not(None))))
         for user in users:
@@ -133,7 +142,8 @@ async def _rotate_key(new_key_b64: str) -> None:
         await session.commit()
 
     print(
-        f"перешифровано: камер {len(cameras)}, TOTP-секретов {len(users)}.\n"
+        f"перешифровано: камер {len(cameras)} (из них с отдельными кредами PTZ "
+        f"{ptz_count}), TOTP-секретов {len(users)}.\n"
         "Теперь замените содержимое secrets/app_key на новый ключ и перезапустите api и worker."
     )
 

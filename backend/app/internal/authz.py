@@ -154,7 +154,7 @@ def ip_allowed(ip: str, cidrs: list[str]) -> bool:
 
 
 # ─── проверка ────────────────────────────────────────────────────────────────
-async def _link_is_valid(link_id: uuid.UUID) -> bool:
+async def link_is_valid(link_id: uuid.UUID) -> bool:
     """Действительна ли ссылка. Результат кэшируется на короткое время."""
     settings = get_settings()
     redis = get_redis()
@@ -209,7 +209,7 @@ async def authz(request: Request) -> Response:
     except ValueError:
         return _deny("grant_is_not_a_link_id", path=mtx_path)
 
-    if not await _link_is_valid(link_id):
+    if not await link_is_valid(link_id):
         return _deny("link_invalid", path=mtx_path, link_id=str(link_id))
 
     return await _allow(mtx_path, str(link_id), viewer_id)

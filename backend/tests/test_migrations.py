@@ -75,10 +75,21 @@ def _from_migrations() -> dict[str, dict[str, str]]:
     with contextlib.redirect_stdout(buffer):
         command.upgrade(config, "head", sql=True)
 
+    sql = buffer.getvalue()
     tables = {
         match.group(1): _columns("(" + match.group(2) + "\n)")
-        for match in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\)", buffer.getvalue(), re.DOTALL)
+        for match in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\)", sql, re.DOTALL)
     }
+
+    # Колонки, добавленные в уже существующую таблицу. Без этого разбора любое
+    # ALTER TABLE проходит мимо теста: колонка есть в моделях, а в схеме,
+    # собранной по миграциям, её нет — и тест падает на ровном месте, хотя
+    # миграция написана верно.
+    for match in re.finditer(r"ALTER TABLE (\w+) ADD COLUMN (.*?);", sql, re.DOTALL):
+        described = _describe(match.group(2))
+        if described is not None:
+            tables.setdefault(match.group(1), {})[described[0]] = described[1]
+
     tables.pop("alembic_version", None)  # служебная таблица самого alembic
     return tables
 

@@ -53,6 +53,22 @@ class StreamProfile(enum.StrEnum):
     transcode = "transcode"
 
 
+class PtzDriver(enum.StrEnum):
+    """Каким протоколом поворачивать камеру.
+
+    В базе хранится строкой, а не PG-типом `ENUM`, в отличие от профиля и
+    статуса: набор вендоров открытый, и добавление пятого драйвера не должно
+    требовать миграции с `ALTER TYPE`.
+    """
+
+    #: Определить при первом обращении и запомнить в `Camera.ptz_meta`.
+    auto = "auto"
+    onvif = "onvif"
+    hikvision = "hikvision"
+    dahua = "dahua"
+    axis = "axis"
+
+
 class CameraStatus(enum.StrEnum):
     unknown = "unknown"
     #: Поток идёт, есть зрители.
@@ -284,6 +300,28 @@ class Camera(Base):
 
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # ── Управление обзором (PTZ) ─────────────────────────────────────────────
+    #: Оператор разрешил поворачивать эту камеру. Пока False, пульт не
+    #: показывается нигде и эндпоинты управления отвечают отказом.
+    ptz_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    ptz_driver: Mapped[str] = mapped_column(String(16), default=PtzDriver.auto.value)
+    #: NULL — порт по умолчанию: 80, либо 443 при ptz_tls. Отдельного поля
+    #: «адрес для управления» намеренно нет: PTZ всегда идёт на camera.host,
+    #: иначе появился бы способ послать сервер куда угодно мимо SSRF-проверки.
+    ptz_port: Mapped[int | None] = mapped_column(Integer, default=None)
+    ptz_tls: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Номер канала на регистраторе, 1-based. У Hikvision и Axis нумерация
+    #: с единицы, у Dahua с нуля — вычитание живёт внутри драйвера Dahua,
+    #: чтобы оператор везде видел один и тот же номер, что и в RTSP-пути.
+    ptz_channel: Mapped[int] = mapped_column(Integer, default=1)
+    #: Отдельные учётные данные для управления, зашифрованы SecretBox.
+    #: NULL — брать логин и пароль из RTSP-URL, как в большинстве камер.
+    ptz_credentials_enc: Mapped[bytes | None] = mapped_column(LargeBinary, default=None)
+    #: Кэш определения: вендор, адрес службы, токен профиля ONVIF, оси.
+    #: Без него ONVIF требовал бы GetProfiles на каждое нажатие стрелки.
+    ptz_meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    ptz_checked_at: Mapped[dt.datetime | None] = mapped_column(TS, default=None)
+
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), default=None
     )
@@ -324,6 +362,11 @@ class ShareLink(Base):
     allowed_cidrs: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     #: Необязательный пароль на саму ссылку (argon2).
     password_hash: Mapped[str | None] = mapped_column(Text, default=None)
+
+    #: Галочка «Возможность управления обзором» при выдаче ссылки. Работает
+    #: только вместе с Camera.ptz_enabled: разрешение на ссылке не включает
+    #: PTZ у камеры, а лишь пропускает его дальше.
+    ptz_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
 
     view_count: Mapped[int] = mapped_column(Integer, default=0)
     last_viewed_at: Mapped[dt.datetime | None] = mapped_column(TS, default=None)

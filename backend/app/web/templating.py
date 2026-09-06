@@ -109,6 +109,8 @@ AUDIT_ACTION_LABELS: dict[str, str] = {
     "link.deleted": "ссылка удалена",
     "link.viewed": "просмотр по ссылке",
     "link.denied": "отказано в доступе",
+    "ptz.control": "управление обзором камеры",
+    "ptz.denied": "отказано в управлении обзором",
     "mail.settings_updated": "настройки почты изменены",
     "mail.test_sent": "проверочное письмо отправлено",
     "mail.test_failed": "проверочное письмо не ушло",

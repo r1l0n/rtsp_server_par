@@ -194,6 +194,35 @@ def normalize_rtsp_url(raw: str) -> tuple[str, bool]:
     return normalized, normalized != raw
 
 
+async def assert_reachable_host(host: str, port: int) -> tuple[str, ...]:
+    """Резолвит имя и требует, чтобы ВСЕ его адреса были публичными.
+
+    Вынесено из `validate_rtsp_url` отдельной функцией, потому что этой же
+    проверкой обязан пользоваться PTZ: он ходит на камеру обычным HTTP, и без
+    неё панель превратилась бы в сканер внутренней сети через второй порт той
+    же камеры. Копировать проверку нельзя — разъехавшиеся правила SSRF хуже,
+    чем их отсутствие: одну из копий рано или поздно забудут поправить.
+    """
+    resolved = await _resolve(host, port)
+    if not resolved:
+        raise UnsafeCameraUrl(f"имя «{host}» никуда не разрешается")
+
+    settings = get_settings()
+    if settings.allow_private_camera_hosts:
+        return resolved
+
+    allowlist = settings.camera_allowlist_networks
+    for item in resolved:
+        address = ipaddress.ip_address(item)
+        if _is_public(address) or _in_allowlist(address, allowlist):
+            continue
+        raise UnsafeCameraUrl(
+            f"адрес {item} находится в приватном диапазоне. Камеры во внутренней "
+            f"сети разрешаются только через CAMERA_HOST_ALLOWLIST"
+        )
+    return resolved
+
+
 async def validate_rtsp_url(raw: str) -> CameraTarget:
     normalized, changed = normalize_rtsp_url(raw)
 
@@ -209,23 +238,7 @@ async def validate_rtsp_url(raw: str) -> CameraTarget:
     if not 1 <= port <= 65535:
         raise UnsafeCameraUrl("некорректный порт")
 
-    settings = get_settings()
-
-    # Если в URL сразу указан IP — проверяем его без обращения к DNS.
-    resolved = await _resolve(host, port)
-    if not resolved:
-        raise UnsafeCameraUrl(f"имя «{host}» никуда не разрешается")
-
-    if not settings.allow_private_camera_hosts:
-        allowlist = settings.camera_allowlist_networks
-        for item in resolved:
-            address = ipaddress.ip_address(item)
-            if _is_public(address) or _in_allowlist(address, allowlist):
-                continue
-            raise UnsafeCameraUrl(
-                f"адрес {item} находится в приватном диапазоне. Камеры во внутренней "
-                f"сети разрешаются только через CAMERA_HOST_ALLOWLIST"
-            )
+    resolved = await assert_reachable_host(host, port)
 
     return CameraTarget(
         url=normalized,

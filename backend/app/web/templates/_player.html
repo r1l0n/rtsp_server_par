@@ -11,7 +11,7 @@
 
 {% macro player(key, ticket='', whep='', hls='', audio=false, title='',
                 poster='', autostart=false, inline=true, show_stop=true,
-                show_fullscreen=true) %}
+                show_fullscreen=true, ptz='') %}
 <div class="player{{ ' player-inline' if inline else '' }}"
      data-key="{{ key }}"
      {% if ticket %}data-ticket="{{ ticket }}"{% endif %}
@@ -33,6 +33,38 @@
   {% endif %}
 
   <div class="player-status"{% if not autostart %} hidden{% endif %}>Подключение…</div>
+
+  {% if ptz %}
+  {# Пульт живёт внутри .player, а не рядом: иначе он пропадал бы в
+     полноэкранном режиме, где как раз и целятся. #}
+  <div class="player-ptz" data-ptz="{{ ptz }}" hidden>
+    <p class="player-ptz-note" hidden></p>
+    <div class="player-ptz-pad" role="group" aria-label="Управление обзором">
+      <button type="button" class="player-button player-ptz-key" data-dir="up" aria-label="Вверх">
+        <svg class="i" aria-hidden="true"><use href="#i-arrow-up"></use></svg>
+      </button>
+      <button type="button" class="player-button player-ptz-key" data-dir="left" aria-label="Влево">
+        <svg class="i" aria-hidden="true"><use href="#i-arrow-left"></use></svg>
+      </button>
+      <button type="button" class="player-button player-ptz-key" data-dir="right" aria-label="Вправо">
+        <svg class="i" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
+      </button>
+      <button type="button" class="player-button player-ptz-key" data-dir="down" aria-label="Вниз">
+        <svg class="i" aria-hidden="true"><use href="#i-arrow-down"></use></svg>
+      </button>
+    </div>
+    <div class="player-ptz-zoom" role="group" aria-label="Зум">
+      <button type="button" class="player-button player-ptz-key" data-dir="zoom_in"
+              aria-label="Приблизить">
+        <svg class="i" aria-hidden="true"><use href="#i-plus"></use></svg>
+      </button>
+      <button type="button" class="player-button player-ptz-key" data-dir="zoom_out"
+              aria-label="Отдалить">
+        <svg class="i" aria-hidden="true"><use href="#i-minus"></use></svg>
+      </button>
+    </div>
+  </div>
+  {% endif %}
 
   <div class="player-bar">
     {% if title %}<span class="player-title">{{ title }}</span>{% endif %}
