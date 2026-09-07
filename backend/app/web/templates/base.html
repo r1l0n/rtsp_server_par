@@ -21,48 +21,58 @@
 
   {% if user %}
   {% set path = request.url.path %}
-  <aside class="sidebar">
-    <a class="brand" href="/">
-      <svg class="i" aria-hidden="true"><use href="#i-camera"></use></svg>{{ app_name }}
+  {# Меню — узкая полоса с одними иконками; названия всплывают ярлыками справа,
+     когда на полосу наводят курсор. Подпись живёт внутри самой ссылки, а не в
+     отдельном всплывающем окне: так ярлык кликается наравне с иконкой, читается
+     скринридером всегда и не требует ни строчки скрипта — CSP всё равно
+     запрещает и инлайновые стили, и инлайновые обработчики. #}
+  <aside class="sidebar" aria-label="Разделы">
+    <a class="rail-item rail-brand" href="/">
+      <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-camera"></use></svg></span>
+      <span class="rail-label">{{ app_name }}</span>
     </a>
 
-    <nav>
-      <a class="nav-item" href="/"
+    <nav class="rail-nav">
+      <a class="rail-item" href="/"
          {% if path == '/' or path.startswith('/cameras') %}aria-current="page"{% endif %}>
-        <svg class="i" aria-hidden="true"><use href="#i-camera"></use></svg>Камеры
+        <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-camera"></use></svg></span>
+        <span class="rail-label">Камеры</span>
       </a>
       {% if user.role == Role.admin %}
-      <a class="nav-item" href="/admin/users"
+      <a class="rail-item" href="/admin/users"
          {% if path.startswith('/admin/users') %}aria-current="page"{% endif %}>
-        <svg class="i" aria-hidden="true"><use href="#i-users"></use></svg>Пользователи
+        <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-users"></use></svg></span>
+        <span class="rail-label">Пользователи</span>
       </a>
-      <a class="nav-item" href="/admin/audit"
+      <a class="rail-item" href="/admin/audit"
          {% if path.startswith('/admin/audit') %}aria-current="page"{% endif %}>
-        <svg class="i" aria-hidden="true"><use href="#i-journal"></use></svg>Журнал
+        <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-journal"></use></svg></span>
+        <span class="rail-label">Журнал</span>
       </a>
       {% endif %}
     </nav>
 
-    <div class="sidebar-foot">
+    <div class="rail-foot">
       {% set who = (user.full_name or user.email).split() %}
-      <div class="nav-account">
-        <a class="nav-item nav-user" href="/profile"
-           {% if path.startswith('/profile') %}aria-current="page"{% endif %}>
+      <a class="rail-item rail-user" href="/profile"
+         {% if path.startswith('/profile') %}aria-current="page"{% endif %}>
+        <span class="rail-glyph">
           <span class="avatar">{{ (who[0][0] ~ (who[1][0] if who|length > 1 else ''))|upper }}</span>
-          <span class="nav-user-name">{{ user.full_name or user.email }}</span>
-        </a>
-        {# Настройки — окном поверх страницы: за ними приходят на минуту
-           и возвращаются к тому, что делали. #}
-        <button type="button" class="btn btn-quiet btn-icon" data-dialog-open="settings"
-                data-dialog-src="/settings/dialog?next={{ path|urlencode }}"
-                aria-label="Настройки" title="Настройки">
-          <svg class="i" aria-hidden="true"><use href="#i-gear"></use></svg>
-        </button>
-      </div>
+        </span>
+        <span class="rail-label">{{ user.full_name or user.email }}</span>
+      </a>
+      {# Настройки — окном поверх страницы: за ними приходят на минуту
+         и возвращаются к тому, что делали. #}
+      <button type="button" class="rail-item" data-dialog-open="settings"
+              data-dialog-src="/settings/dialog?next={{ path|urlencode }}">
+        <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-gear"></use></svg></span>
+        <span class="rail-label">Настройки</span>
+      </button>
       <form method="post" action="/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="nav-item nav-logout">
-          <svg class="i" aria-hidden="true"><use href="#i-logout"></use></svg>Выйти
+        <button type="submit" class="rail-item rail-logout">
+          <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-logout"></use></svg></span>
+          <span class="rail-label">Выйти</span>
         </button>
       </form>
     </div>

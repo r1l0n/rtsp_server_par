@@ -93,3 +93,40 @@ def test_brand_colour_is_not_used_for_every_link() -> None:
     """
     assert "--link" in _tokens(":root {")
     assert "a { color: var(--link);" in CSS
+
+
+def test_rail_labels_keep_their_names_while_hidden() -> None:
+    """Названия разделов прячутся прозрачностью, а не display/visibility.
+
+    Полоса меню — один ряд иконок, и всё имя ссылки живёт в спрятанном ярлыке.
+    display:none и visibility:hidden убрали бы его из дерева доступности, и
+    скринридер прочитал бы шесть раз «ссылка». Глазами это не ловится вовсе.
+
+    pointer-events там по той же причине наоборот обязателен: спрятанный ярлык
+    лежит поверх содержимого и без него перехватывал бы чужие клики.
+    """
+    label = _block(".rail-label {")
+    assert "opacity: 0" in label
+    assert "pointer-events: none" in label
+    assert "display: none" not in label
+    assert "visibility: hidden" not in label
+
+
+def test_rail_opens_for_the_keyboard_too() -> None:
+    """Ярлыки раскрываются и по фокусу, а не только под курсором.
+
+    С клавиатуры полоса иначе остаётся рядом безымянных квадратов: видно,
+    что фокус куда-то переехал, но не видно куда.
+    """
+    assert ".sidebar:focus-within .rail-label" in CSS
+
+
+def test_narrow_screens_name_the_sections_without_hover() -> None:
+    """На телефоне наведения нет — там подписи стоят на месте, а не всплывают.
+
+    Полоса из одних иконок на сенсорном экране превращается в ребус: узнать,
+    что за иконка, можно только ткнув в неё и посмотрев, куда унесло.
+    """
+    narrow = _block("@media (max-width: 860px)")
+    assert ".rail-label" in narrow
+    assert "opacity: 1" in narrow

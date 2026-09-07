@@ -249,12 +249,27 @@ code {
 }
 
 /* ── Боковое меню ──────────────────────────────────────────────────────────
-   Навигация слева, а не сверху: пунктов стало больше (камеры, пользователи,
-   журнал, настройки), и в строку они помещались только сокращениями.
-   По вертикали место дешёвое — список растёт вниз сколько угодно. */
+   Узкая полоса с одними иконками, названия всплывают ярлыками справа при
+   наведении на полосу. Раскладка списком отъедала 236px по всей высоте ради
+   пяти слов, которые оператор и так знает наизусть: на плитках камер эта
+   колонка — примерно один кадр в ряду.
+
+   Полоса не раздвигается, ярлыки ложатся поверх содержимого: раздвижение
+   переверстало бы страницу под курсором, а список камер при этом прыгает
+   на другое число колонок.
+
+   Ярлык — часть самой ссылки, а не отдельное окно рядом. Отсюда три вещи
+   даром: он кликается наравне с иконкой, служит ссылке доступным именем в
+   любой момент (поэтому прячем прозрачностью, а не visibility — та убирает
+   узел из дерева доступности), и наведение на сам ярлык держит полосу
+   раскрытой, потому что :hover идёт по дереву документа, а не по геометрии. */
+/* Ширина полосы отдельным правилом, а не в блоке палитры: тест стилей
+   считает всё объявленное там цветом и требует пары в светлой теме. */
+:root { --rail: 56px; }
+
 .shell {
   display: grid;
-  grid-template-columns: 236px minmax(0, 1fr);
+  grid-template-columns: var(--rail) minmax(0, 1fr);
   min-height: 100vh;
 }
 
@@ -263,86 +278,173 @@ code {
   top: 0;
   align-self: start;
   height: 100vh;
+  /* Ярлыки вылетают за правый край полосы и обязаны лечь поверх содержимого.
+     Ниже модального окна (60): меню не должно всплывать над диалогом. */
+  z-index: 30;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-4) var(--space-3);
+  gap: 2px;
+  padding: var(--space-3) 0;
   background: var(--sidebar);
   border-right: 1px solid var(--divider);
 }
 
-.brand {
+/* Три зоны на полосе — логотип, разделы, учётная запись — разделены тонкими
+   чертами: без них семь одинаковых квадратов читаются как один длинный список
+   и глаз не за что зацепить. */
+.rail-nav {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+.rail-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3) var(--space-4);
-  font-weight: 500;
-  font-size: 18px;
-  letter-spacing: -0.01em;
+  justify-content: center;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
   color: var(--text);
   text-decoration: none;
-}
-.brand .i { width: 22px; height: 22px; color: var(--accent); }
-
-.sidebar nav { display: flex; flex-direction: column; gap: 2px; }
-
-/* Заголовок группы. Отделяет «Настройки» от разделов, куда ходят каждый день. */
-.nav-group {
-  margin: var(--space-4) 0 var(--space-1);
-  padding: 0 var(--space-3);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--faint);
+  cursor: pointer;
 }
 
-.nav-item {
-  display: flex;
+/* Квадрат с иконкой. Подсветка живёт на нём, а не на всей строке: полоса
+   узкая, и залитый прямоугольник во всю ширину читался бы как выделение
+   куска фона, а не как кнопка. */
+.rail-glyph {
+  flex: none;
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: 8px var(--space-3);
+  justify-content: center;
+  width: 40px;
+  height: 40px;
   border-radius: var(--radius-md);
-  font-size: 14px;
-  color: var(--text);
-  text-decoration: none;
+  color: var(--neutral-400);
 }
-.nav-item .i { flex: none; width: 18px; height: 18px; color: var(--neutral-400); }
-.nav-item:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
-.nav-item[aria-current="page"] {
-  background: color-mix(in srgb, var(--text) 9%, transparent);
+.rail-glyph .i { width: 20px; height: 20px; }
+
+.rail-item:hover .rail-glyph {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
-  box-shadow: inset 3px 0 0 var(--accent);
 }
-.nav-item[aria-current="page"] .i { color: var(--accent); }
+.rail-item:active .rail-glyph { background: color-mix(in srgb, var(--text) 14%, transparent); }
+
+/* Рамку фокуса переносим на сам квадрат: у строки ширина всей полосы, и
+   обводка по её краям выглядит как рамка вокруг пустоты. */
+.rail-item:focus-visible { outline: none; }
+.rail-item:focus-visible .rail-glyph {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Текущий раздел. Красный тут в своём праве — это отметка «вы здесь»,
+   а не очередная ссылка. Засечка у самого края полосы видна и боковым
+   зрением, когда курсор далеко. */
+.rail-item[aria-current="page"] .rail-glyph {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+.rail-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 20px;
+  margin-top: -10px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+
+/* Логотип. Иконка фирменного красного и без подсветки под курсором —
+   это подпись, а не пункт меню. */
+.rail-brand .rail-glyph { color: var(--accent); }
+.rail-brand .rail-glyph .i { width: 22px; height: 22px; }
+.rail-brand:hover .rail-glyph { background: none; color: var(--accent); }
+
+/* Всплывающий ярлык. Прячется прозрачностью и pointer-events: спрятанный
+   ярлык обязан пропускать клики к содержимому под собой. */
+.rail-label {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  z-index: 1;
+  max-width: 216px;
+  padding: 7px 11px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(0, -50%);
+}
+.rail-brand .rail-label { font-weight: 500; letter-spacing: -0.01em; }
+
+/* Раскрытие — и по курсору, и по фокусу: с клавиатуры полоса иначе была бы
+   рядом безымянных квадратов. */
+.sidebar:hover .rail-label,
+.sidebar:focus-within .rail-label {
+  opacity: 1;
+  transform: translate(var(--space-2), -50%);
+  pointer-events: auto;
+}
+.rail-item:hover .rail-label {
+  background: color-mix(in srgb, var(--text) 6%, var(--surface));
+}
+.rail-item[aria-current="page"] .rail-label { color: var(--accent); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .rail-label,
+  .rail-glyph { transition: opacity 0.13s ease, transform 0.13s ease, background 0.13s ease; }
+  /* Задержка только на появление: полосу часто пересекают по пути к
+     содержимому, и мигать ярлыками на каждый такой проход не нужно.
+     Уходят они сразу — это ожидаемо и не раздражает. */
+  .sidebar:hover .rail-label { transition-delay: 90ms; }
+}
 
 /* Учётная запись прижата к низу: там её ищут по привычке из других панелей. */
-.sidebar-foot {
+.rail-foot {
+  position: relative;
   margin-top: auto;
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--divider);
+  padding-top: var(--space-2);
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
-.nav-account { display: flex; align-items: center; gap: var(--space-1); }
-.nav-account .nav-item { flex: 1; min-width: 0; }
-.nav-user { min-width: 0; }
-.nav-user .nav-user-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Разделители псевдоэлементом, а не border: рамка тянулась бы во всю ширину
+   полосы до самых краёв и спорила с её собственной границей справа. */
+.rail-nav::before,
+.rail-foot::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--space-3);
+  right: var(--space-3);
+  height: 1px;
+  background: var(--divider);
 }
-.nav-logout {
-  width: 100%;
-  justify-content: flex-start;
-  border: 0;
-  background: none;
-  font: inherit;
-  cursor: pointer;
-  text-align: left;
-}
+/* Кружок с инициалами уже сам по себе заливка — подложка под ним превращает
+   пункт в две вложенные фигуры. Текущий раздел отмечаем кольцом по кружку. */
+.rail-user .avatar { width: 26px; height: 26px; font-size: 11px; }
+.rail-user[aria-current="page"] .rail-glyph { background: none; }
+.rail-user[aria-current="page"] .avatar { box-shadow: 0 0 0 2px var(--accent); }
 
-/* Узкий экран: меню превращается в полосу над содержимым и листается вбок.
+/* Узкий экран: наведения нет вовсе, поэтому полоса разворачивается в строку
+   над содержимым и подписи встают на место — рядом с иконками, без всплытия.
    Выдвижная панель потребовала бы состояния и скрипта — ради шести ссылок
    это лишнее. */
 @media (max-width: 860px) {
@@ -350,23 +452,76 @@ code {
   .sidebar {
     position: static;
     height: auto;
+    z-index: auto;
     flex-direction: row;
     align-items: center;
     gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
     overflow-x: auto;
     border-right: 0;
     border-bottom: 1px solid var(--divider);
   }
-  .brand { padding: 0 var(--space-3) 0 0; }
-  .sidebar nav { flex-direction: row; }
-  .nav-group { display: none; }
-  .nav-item { white-space: nowrap; }
-  .sidebar-foot {
-    margin: 0 0 0 auto;
-    padding: 0 0 0 var(--space-3);
+  .rail-nav {
     flex-direction: row;
-    border-top: 0;
-    border-left: 1px solid var(--divider);
+    margin: 0 0 0 var(--space-2);
+    padding: 0 0 0 var(--space-2);
+  }
+  .rail-brand { margin-right: var(--space-1); }
+  .rail-item {
+    width: auto;
+    flex: none;
+    gap: var(--space-2);
+    padding-right: var(--space-3);
+    border-radius: var(--radius-md);
+  }
+  .rail-glyph { width: 32px; height: 32px; }
+  .rail-item:hover .rail-glyph,
+  .rail-item[aria-current="page"] .rail-glyph { background: none; }
+  .rail-item:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+  .rail-item[aria-current="page"] {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  .rail-item[aria-current="page"]::before { display: none; }
+  /* Ярлык становится обычной подписью в строке. */
+  .rail-label {
+    position: static;
+    max-width: 160px;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    font-size: 14px;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+  .rail-item:hover .rail-label { background: none; }
+  .rail-brand .rail-label { font-size: 17px; }
+  .rail-foot {
+    margin: 0 0 0 auto;
+    padding: 0 0 0 var(--space-2);
+    flex-direction: row;
+  }
+  /* Имя целиком в строку не влезает — в подвале остаются одни иконки. */
+  .rail-foot .rail-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .rail-foot .rail-item { padding-right: 0; }
+  /* Черты между зонами тоже поворачиваются: в строке они вертикальные. */
+  .rail-nav::before,
+  .rail-foot::before {
+    top: var(--space-1);
+    bottom: var(--space-1);
+    left: 0;
+    right: auto;
+    width: 1px;
+    height: auto;
   }
 }
 
