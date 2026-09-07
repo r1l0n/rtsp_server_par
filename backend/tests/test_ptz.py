@@ -458,6 +458,39 @@ async def test_broken_camera_does_not_keep_the_lock(
     assert await lock.owner(camera.id) is None
 
 
+async def test_unknown_direction_does_not_take_the_camera(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Мусорный запрос не должен занимать пульт — и вообще доходить до камеры.
+
+    Раньше блокировка захватывалась раньше разбора направления и на ошибке
+    не снималась: одно нажатие с подделанным телом запирало камеру на
+    ptz_hold_seconds, причём ни для кого.
+    """
+    camera = _camera()
+
+    async def must_not_run(_camera: Camera) -> tuple[object, Target]:
+        raise AssertionError("до камеры дойти не должны")
+
+    monkeypatch.setattr(service, "_resolve", must_not_run)
+    result = await service.press(camera, "diagonal", "u:1")
+
+    assert result.ok is False
+    assert result.reason == "error"
+    assert await lock.owner(camera.id) is None
+
+
+async def test_unknown_direction_does_not_evict_the_current_holder() -> None:
+    """И не должен отбирать камеру у того, кто ей сейчас управляет."""
+    camera = _camera()
+    assert (await lock.acquire(camera.id, "u:owner", 15))[0]
+
+    result = await service.press(camera, "diagonal", "u:stranger")
+
+    assert result.ok is False
+    assert await lock.owner(camera.id) == "u:owner"
+
+
 # ─── Учётные данные ──────────────────────────────────────────────────────────
 def test_credentials_are_taken_from_the_rtsp_link() -> None:
     """Пароли камер сплошь со спецсимволами и хранятся перекодированными."""

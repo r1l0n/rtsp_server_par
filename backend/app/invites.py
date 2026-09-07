@@ -13,11 +13,11 @@
 from __future__ import annotations
 
 import datetime as dt
-import html
 import re
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import audit, mail
@@ -38,6 +38,15 @@ SUBJECT = "Приглашение в RTSP"
 
 class InviteError(ValueError):
     """Приглашение выдать нельзя. Текст пригоден для показа администратору."""
+
+
+#: Один текст на обе проверки занятого адреса — ту, что идёт запросом, и ту,
+#: что срабатывает уникальным индексом при гонке. Человек по обоим путям
+#: приходит в одно и то же состояние, и объяснение должно быть одним.
+EMAIL_TAKEN = (
+    "Учётная запись с этим адресом уже существует. Войдите или "
+    "восстановите пароль через администратора."
+)
 
 
 def normalize_email(raw: str) -> str:
@@ -134,8 +143,10 @@ def _render_email(invitation: Invitation, token: str, inviter: User) -> tuple[st
 
     body = mail.wrap_html(
         greeting=greeting,
+        # Экранировать здесь больше не нужно — wrap_html экранирует всё сам.
+        # Двойное экранирование превратило бы «Ко&Ко» в «Ко&amp;Ко».
         lead=(
-            f"{html.escape(who)} приглашает вас в сервис просмотра камер. "
+            f"{who} приглашает вас в сервис просмотра камер. "
             f"Нажмите кнопку ниже, чтобы задать пароль и войти."
         ),
         button_label="Задать пароль",
@@ -196,10 +207,7 @@ async def accept(
     """
     if await db.scalar(select(User).where(User.email == invitation.email)) is not None:
         # Учётку успели завести другим путём, пока письмо лежало в ящике.
-        raise InviteError(
-            "Учётная запись с этим адресом уже существует. Войдите или "
-            "восстановите пароль через администратора."
-        )
+        raise InviteError(EMAIL_TAKEN)
 
     user = User(
         email=invitation.email,
@@ -210,7 +218,21 @@ async def accept(
         must_change_password=False,
     )
     db.add(user)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        # Между проверкой выше и этой вставкой есть окно, и двойной клик по
+        # ссылке из письма в него попадает: обе попытки проходят проверку,
+        # вторая упирается в уникальный индекс users.email. Без этой ветки
+        # сотрудник видел бы «Внутренняя ошибка сервиса» на первом же шаге
+        # знакомства с сервисом — причём учётная запись при этом создана,
+        # и он об этом не знает.
+        #
+        # Откат обязателен: после IntegrityError транзакция помечена
+        # прерванной, и любое следующее обращение к сессии упало бы уже
+        # с PendingRollbackError.
+        await db.rollback()
+        raise InviteError(EMAIL_TAKEN) from exc
 
     now = dt.datetime.now(dt.UTC)
     invitation.accepted_at = now

@@ -26,6 +26,21 @@ from .base import PtzAuthError, PtzError, Target
 
 log = get_logger("ptz")
 
+#: Больше этого от камеры не читаем.
+#:
+#: Предел здесь, а не в драйверах, потому что там он был мнимым: `httpx` без
+#: `stream()` буферизует тело целиком ещё до того, как до него дотянется срез
+#: `response.text[:_MAX_BODY]`, и собственного ограничения на размер ответа
+#: у него нет. Камера — или что угодно, что оказалось на её адресе и порту, —
+#: могла вернуть многогигабайтное тело прямо в память процесса api, того
+#: самого, который держит панель. Адрес управления это обычный host камеры
+#: с произвольным портом, так что направить опознание на файловый сервер
+#: оператор может и без злого умысла.
+#:
+#: Значение выше пределов разбора в onvif.py (256 КБ) и vendors.py (64 КБ):
+#: их семантика не меняется, отсекается только заведомо не-камера.
+MAX_RESPONSE_BYTES = 512_000
+
 _client: httpx.AsyncClient | None = None
 _auth_cache: dict[tuple[str, int, str], httpx.DigestAuth] = {}
 
@@ -91,13 +106,38 @@ async def request(
     """Один запрос к камере. Любую беду переводит в PtzError."""
     url = target.url(path)
     try:
-        response = await get_client().request(
+        # stream(), а не request(): тело читается по кускам и обрывается на
+        # MAX_RESPONSE_BYTES. Ответ пересобирается в обычный Response, чтобы
+        # драйверы по-прежнему работали с .text, .status_code и .headers.
+        async with get_client().stream(
             method,
             url,
             content=content.encode("utf-8") if content is not None else None,
             headers=headers,
             auth=_auth(target) if authenticate else httpx.USE_CLIENT_DEFAULT,
-        )
+        ) as streamed:
+            payload = bytearray()
+            async for chunk in streamed.aiter_bytes():
+                payload.extend(chunk)
+                if len(payload) > MAX_RESPONSE_BYTES:
+                    log.info(
+                        "ptz_response_too_large",
+                        host=target.host, port=target.port, limit=MAX_RESPONSE_BYTES,
+                    )
+                    raise PtzError(
+                        "по этому адресу отвечает не камера: тело ответа больше "
+                        f"{MAX_RESPONSE_BYTES // 1024} КБ. Проверьте порт управления"
+                    )
+            response = httpx.Response(
+                status_code=streamed.status_code,
+                headers=streamed.headers,
+                content=bytes(payload),
+                request=streamed.request,
+            )
+    except PtzError:
+        # Уже разобранная и объяснённая ошибка — заворачивать её в «камера
+        # не отвечает» нельзя, это увело бы оператора не туда.
+        raise
     except Exception as exc:
         # Текст ошибки может содержать URL с учётными данными.
         detail = strip_credentials(f"{type(exc).__name__}: {exc}")[:200]

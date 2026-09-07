@@ -165,6 +165,45 @@ async def test_viewer_counter_is_per_link() -> None:
     assert await count_viewers(link_id) == 2
 
 
+async def test_all_viewers_counted_across_links() -> None:
+    """Метрика считает зрителей по реестру ссылок, а не обходом keyspace."""
+    first, second = uuid.uuid4(), uuid.uuid4()
+    await grant(new_viewer_id(), MTX_PATH, first, ttl_seconds=60)
+    await grant(new_viewer_id(), MTX_PATH, first, ttl_seconds=60)
+    await grant(new_viewer_id(), "bbbbbbbb22222222bbbbbbbb", second, ttl_seconds=60)
+
+    assert await authz.count_all_viewers() == 3
+
+
+async def test_all_viewers_is_zero_without_a_single_grant() -> None:
+    assert await authz.count_all_viewers() == 0
+
+
+async def test_viewer_registry_forgets_links_whose_viewers_left(fake_redis) -> None:
+    """Множества зрителей истекают сами — реестр не должен расти вечно.
+
+    Записи чистятся лениво, при подсчёте: ссылка, у которой не осталось
+    ни одного зрителя, из реестра выпадает.
+    """
+    link_id = uuid.uuid4()
+    await grant(new_viewer_id(), MTX_PATH, link_id, ttl_seconds=60)
+    assert await fake_redis.sismember(authz._LINK_INDEX, str(link_id))
+
+    # Так выглядит истёкшее множество зрителей: ключа просто нет.
+    await fake_redis.delete(f"link_viewers:{link_id}")
+
+    assert await authz.count_all_viewers() == 0
+    assert not await fake_redis.sismember(authz._LINK_INDEX, str(link_id))
+
+
+async def test_operator_view_stays_out_of_the_viewer_registry(fake_redis) -> None:
+    """У просмотра из панели ссылки нет — в реестре ему делать нечего."""
+    await grant_operator(new_viewer_id(), MTX_PATH, 900)
+
+    assert await fake_redis.scard(authz._LINK_INDEX) == 0
+    assert await authz.count_all_viewers() == 0
+
+
 def test_empty_cidr_list_allows_any_address() -> None:
     assert ip_allowed("203.0.113.7", [])
 
@@ -290,6 +329,50 @@ async def test_watching_extends_the_grant(allow_all_links, fake_redis) -> None:
 
     ttl = await fake_redis.ttl(f"viewer:{viewer_id}")
     assert ttl > get_settings().view_cookie_ttl_minutes * 60 - 10
+
+
+async def test_watching_extends_the_viewer_set_of_the_link(
+    allow_all_links, fake_redis
+) -> None:
+    """Множество зрителей ссылки живёт столько же, сколько сам доступ.
+
+    Раньше продлевался только ключ прав, а множество истекало посреди
+    просмотра — и вместе с ним переставал работать лимит одновременных
+    зрителей: count_viewers возвращал ноль и пускал следующего на ссылку,
+    у которой уже был зритель.
+    """
+    from app.config import get_settings
+
+    viewer_id = new_viewer_id()
+    link_id = uuid.uuid4()
+    await grant(viewer_id, MTX_PATH, link_id, 30)
+
+    with _client() as client:
+        assert _authz(client, f"/hls/{MTX_PATH}/index.m3u8",
+                      {VIEW_COOKIE: viewer_id}).status_code == 200
+
+    ttl = await fake_redis.ttl(f"link_viewers:{link_id}")
+    assert ttl > get_settings().view_cookie_ttl_minutes * 60 - 10
+    # И зритель по-прежнему числится в лимите — ради этого всё и делается.
+    # Спрашиваем сам клиент фикстуры: выход из TestClient гасит lifespan,
+    # а тот обнуляет синглтон, и viewer_counted() полез бы в настоящий Redis.
+    assert await fake_redis.sismember(f"link_viewers:{link_id}", viewer_id)
+
+
+async def test_operator_view_does_not_create_a_viewer_set(fake_redis) -> None:
+    """У просмотра из панели ссылки нет — продлевать нечего.
+
+    Значение гранта здесь не идентификатор ссылки, а слово «operator»,
+    и продление вслепую завело бы бессмысленный ключ link_viewers:operator.
+    """
+    viewer_id = new_viewer_id()
+    await grant_operator(viewer_id, MTX_PATH, 900)
+
+    with _client() as client:
+        assert _authz(client, f"/whep/{MTX_PATH}/whep",
+                      {VIEW_COOKIE: viewer_id}).status_code == 200
+
+    assert await fake_redis.exists("link_viewers:operator") == 0
 
 
 async def test_uri_without_prefix_is_still_recognised(allow_all_links) -> None:

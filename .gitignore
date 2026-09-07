@@ -11,5 +11,8 @@ venv/
 *.egg-info/
 ops/backups/
 caddy_data/
+# hls.js качает ops/fetch-vendor.sh при развёртывании. В репозитории лежит
+# только эталонная контрольная сумма рядом с ним — она отслеживается.
+backend/app/web/static/vendor/hls.min.js
 # Точка возврата, которую ops/update.sh пишет перед обновлением.
 .update-previous-revision

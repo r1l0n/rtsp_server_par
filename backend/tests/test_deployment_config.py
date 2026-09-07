@@ -304,3 +304,49 @@ def test_caddy_falls_through_to_404_on_other_media_paths(caddyfile: str) -> None
     """Служебные страницы MediaMTX не должны быть доступны наружу."""
     assert re.search(r"handle /whep/\* \{\s*respond 404", caddyfile)
     assert re.search(r"handle /hls/\* \{\s*respond 404", caddyfile)
+
+
+# ─── Сторонняя библиотека ────────────────────────────────────────────────────
+FETCH_VENDOR = ROOT / "ops" / "fetch-vendor.sh"
+HLS_SUMFILE = ROOT / "backend" / "app" / "web" / "static" / "vendor" / "hls.min.js.sha256"
+
+
+def test_hls_checksum_is_pinned_in_the_repository() -> None:
+    """Эталон обязан лежать в репозитории, а не появляться при скачивании.
+
+    hls.js исполняется в браузере зрителя на странице, где живёт cookie
+    доступа к медиа, и CSP от подменённого локального файла не защищает —
+    он и есть 'self'.
+    """
+    assert HLS_SUMFILE.is_file(), "нет закреплённой контрольной суммы hls.js"
+
+    digest, _, version = HLS_SUMFILE.read_text(encoding="utf-8").split("\n")[0].partition("  ")
+    assert re.fullmatch(r"[0-9a-f]{64}", digest), "сумма не похожа на sha256"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version.strip()), "рядом с суммой нет версии"
+
+
+def test_fetch_vendor_pins_the_same_version_as_the_checksum() -> None:
+    """Версия в скрипте и версия эталона обязаны совпадать.
+
+    Иначе скрипт скачивает одно, а сверяет с другим, и защита срабатывает
+    на ровном месте — причём выглядит это как подмена на CDN.
+    """
+    script = FETCH_VENDOR.read_text(encoding="utf-8")
+    pinned = HLS_SUMFILE.read_text(encoding="utf-8").split("\n")[0].split("  ")[1].strip()
+
+    match = re.search(r'HLS_VERSION="\$\{HLS_VERSION:-([\d.]+)\}"', script)
+    assert match is not None, "в скрипте не нашлась версия по умолчанию"
+    assert match.group(1) == pinned
+
+
+def test_fetch_vendor_never_writes_the_checksum_itself() -> None:
+    """Скрипт не должен сам создавать эталон.
+
+    Так было раньше: при первом запуске он записывал в эталон то, что отдал
+    CDN, — и на свежей машине проверка сверяла файл сам с собой.
+    """
+    script = FETCH_VENDOR.read_text(encoding="utf-8")
+    assert '> "$SUMFILE"' not in script
+    assert '>> "$SUMFILE"' not in script
+    # И отсутствие эталона обязано быть отказом, а не поводом его завести.
+    assert 'if [ ! -f "$SUMFILE" ]; then' in script

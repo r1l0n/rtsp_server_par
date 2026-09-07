@@ -116,8 +116,8 @@ def test_every_column_matches_between_models_and_migration() -> None:
     assert not mismatches, "\n".join(mismatches)
 
 
-def test_audit_log_is_protected_from_updates() -> None:
-    """Журнал аудита должен быть защищён на уровне БД, а не только кодом."""
+def _upgrade_sql() -> str:
+    """SQL всей цепочки миграций, отрендеренный офлайн."""
     from alembic.config import Config
 
     from alembic import command
@@ -128,7 +128,36 @@ def test_audit_log_is_protected_from_updates() -> None:
     config.stdout = buffer
     with contextlib.redirect_stdout(buffer):
         command.upgrade(config, "head", sql=True)
+    return buffer.getvalue()
 
-    sql = buffer.getvalue()
+
+def test_audit_log_is_protected_from_updates() -> None:
+    """Журнал аудита должен быть защищён на уровне БД, а не только кодом."""
+    sql = _upgrade_sql()
     assert "CREATE TRIGGER audit_log_no_update_delete" in sql
     assert "BEFORE UPDATE OR DELETE ON audit_log" in sql
+
+
+def test_audit_log_deletion_is_open_only_to_the_retention_flag() -> None:
+    """Уборка по сроку хранения — единственная дверь в защите журнала.
+
+    Без неё таблицу нельзя было подрезать вообще: DELETE поднимал исключение,
+    и администратору, упёршемуся в диск, оставалось снять триггер целиком.
+    Дверь именованная и открывается только на DELETE — UPDATE обязан
+    оставаться запрещённым при любом значении флага.
+    """
+    from app.worker import AUDIT_RETENTION_UNLOCK
+
+    body = _upgrade_sql()
+    body = body[body.rindex("CREATE OR REPLACE FUNCTION audit_log_is_append_only") :]
+    gate = body[: body.index("$$ LANGUAGE plpgsql")]
+
+    assert "TG_OP = 'DELETE'" in gate
+    assert "current_setting('rtspgw.audit_retention', true) = 'on'" in gate
+    assert "RAISE EXCEPTION" in gate
+    # Имя параметра продублировано в worker.py — оно обязано совпадать,
+    # иначе уборка молча упирается в триггер и журнал растёт дальше.
+    assert "rtspgw.audit_retention" in AUDIT_RETENTION_UNLOCK
+    # SET LOCAL, а не SET: иначе флаг уедет в соседний запрос вместе
+    # с соединением из пула и откроет дверь кому попало.
+    assert AUDIT_RETENTION_UNLOCK.startswith("SET LOCAL ")

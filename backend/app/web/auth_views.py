@@ -128,6 +128,11 @@ async def login(
         )
 
     if user.locked_until is not None and user.locked_until > now:
+        # Заглушку считаем и здесь. Без неё ветка «заблокирована» отвечает за
+        # единицы миллисекунд вместо ~60, и по времени ответа видно, что
+        # учётная запись существует, — ровно то, что прячут _DUMMY_HASH выше
+        # и общий текст ошибки.
+        verify_password(_DUMMY_HASH, password)
         minutes = int((user.locked_until - now).total_seconds() // 60) + 1
         await audit.record(db, audit.LOGIN_LOCKED, actor_id=user.id, actor_label=email, ip=ip)
         await db.commit()
@@ -395,7 +400,17 @@ async def reset_submit(
 
 # ─── Выход ───────────────────────────────────────────────────────────────────
 @router.post("/logout")
-async def logout(request: Request, db: DbSession, session: SessionDep) -> RedirectResponse:
+async def logout(
+    request: Request, db: DbSession, session: SessionDep, _: CsrfProtected
+) -> RedirectResponse:
+    """Выход из системы.
+
+    CSRF-токен здесь единственный обработчик панели, меняющий состояние, до
+    сих пор не проверял. На практике межсайтовый POST закрыт SameSite=Lax —
+    cookie сессии он просто не донесёт, — но защита держалась на одном рубеже
+    вместо двух, и исключение из общего правила ничем не объяснялось. Форма
+    в base.html токен и так отправляет.
+    """
     if session is not None:
         if session.user_id:
             await audit.record(

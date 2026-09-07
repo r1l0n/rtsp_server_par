@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import ipaddress
 import json
 import re
@@ -27,7 +28,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import select
 
-from ..config import get_settings
+from ..config import IPNetwork, get_settings
 from ..db import get_sessionmaker
 from ..logging_setup import get_logger
 from ..middleware import client_ip
@@ -44,6 +45,23 @@ OPERATOR_GRANT = "operator"
 _VIEWER_PREFIX = "viewer:"
 _LINK_CACHE_PREFIX = "authz:link:"
 _LINK_VIEWERS_PREFIX = "link_viewers:"
+
+#: Реестр ссылок, у которых есть зрители, — чтобы их можно было пересчитать,
+#: не обходя keyspace целиком.
+#:
+#: Метрика раньше искала множества зрителей через `SCAN MATCH link_viewers:*`,
+#: а SCAN фильтрует после обхода: стоимость определяется размером всего
+#: keyspace, а не числом подходящих ключей. В том же keyspace живут сессии
+#: панели, счётчики частоты по каждому IP и каждой учётке, гранты зрителей и
+#: сожжённые коды TOTP — на работающей установке это десятки тысяч ключей,
+#: и Prometheus обходил их все четыре раза в минуту.
+#:
+#: Имя без двоеточия намеренно: под `link_viewers:*` оно не подпадает и
+#: с ключом реальной ссылки не столкнётся.
+#:
+#: Устаревшие записи чистятся лениво, при подсчёте, — тем же приёмом, что и
+#: индекс сессий пользователя в auth/sessions.py.
+_LINK_INDEX = "link_viewers_index"
 
 #: /whep/<path>/... и /hls/<path>/... — те же префиксы, что разрешены в Caddyfile.
 #:
@@ -91,6 +109,7 @@ async def grant(viewer_id: str, mtx_path: str, link_id: uuid.UUID, ttl_seconds: 
     pipe.expire(viewer_key, ttl_seconds)
     pipe.sadd(link_viewers_key, viewer_id)
     pipe.expire(link_viewers_key, ttl_seconds)
+    pipe.sadd(_LINK_INDEX, str(link_id))
     await pipe.execute()
 
 
@@ -120,12 +139,26 @@ async def count_all_viewers() -> int:
     зрителей, — это единственное место, где состояние настоящее. Метрика
     раньше бралась из таблицы view_sessions и показывала не зрителей, а число
     открытий страницы за последние минуты.
+
+    Ссылки берутся из реестра, а не поиском по keyspace (см. `_LINK_INDEX`):
+    три обмена с Redis вместо обхода всех ключей на каждый сбор метрик.
+    Множества зрителей истекают сами, поэтому реестр подчищается здесь же —
+    ссылка без зрителей из него удаляется.
     """
     redis = get_redis()
-    total = 0
-    async for key in redis.scan_iter(match=f"{_LINK_VIEWERS_PREFIX}*", count=200):
-        total += int(await redis.scard(key))
-    return total
+    link_ids = sorted(await redis.smembers(_LINK_INDEX))
+    if not link_ids:
+        return 0
+
+    pipe = redis.pipeline()
+    for link_id in link_ids:
+        pipe.scard(f"{_LINK_VIEWERS_PREFIX}{link_id}")
+    counts = [int(value) for value in await pipe.execute()]
+
+    stale = [link_id for link_id, count in zip(link_ids, counts, strict=True) if not count]
+    if stale:
+        await redis.srem(_LINK_INDEX, *stale)
+    return sum(counts)
 
 
 async def viewer_counted(link_id: uuid.UUID, viewer_id: str) -> bool:
@@ -164,7 +197,28 @@ async def drop_link_viewers(link_id: uuid.UUID) -> None:
             pipe.hdel(f"{_VIEWER_PREFIX}{viewer_id}", mtx_path)
     pipe.delete(link_viewers_key)
     pipe.delete(f"{_LINK_CACHE_PREFIX}{link_id}")
+    # Зрителей у ссылки больше нет — из реестра её тоже убираем, не дожидаясь
+    # ленивой уборки при следующем сборе метрик.
+    pipe.srem(_LINK_INDEX, str(link_id))
     await pipe.execute()
+
+
+@functools.lru_cache(maxsize=1024)
+def _network(cidr: str) -> IPNetwork | None:
+    """Подсеть из строки. Неразбираемая строка — None, и её просто пропускают.
+
+    С кэшем, потому что вызывается на горячем пути: LL-HLS дёргает сегменты
+    по нескольку раз в секунду на каждого зрителя, и на каждый запрос строки
+    разбирались заново. Это была единственная вычислительная работа в authz,
+    который в остальном сводится к паре обращений к Redis.
+
+    Кэш ограничен сверху и заполняется значениями из БД, а не из запроса:
+    подсети приходят из поля ссылки, которое заполняет оператор.
+    """
+    try:
+        return ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return None
 
 
 def ip_allowed(ip: str, cidrs: list[str]) -> bool:
@@ -174,13 +228,11 @@ def ip_allowed(ip: str, cidrs: list[str]) -> bool:
         address = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    for cidr in cidrs:
-        try:
-            if address in ipaddress.ip_network(cidr, strict=False):
-                return True
-        except ValueError:
-            continue
-    return False
+    return any(
+        address in network
+        for network in (_network(cidr) for cidr in cidrs)
+        if network is not None
+    )
 
 
 # ─── проверка ────────────────────────────────────────────────────────────────
@@ -310,6 +362,17 @@ async def _allow(mtx_path: str, link_id: str, viewer_id: str) -> Response:
     # обрывался ровно через VIEW_COOKIE_TTL после открытия ссылки — посреди
     # трансляции, и выглядело это как «плеер сломался сам по себе». Отзыв
     # ссылки по-прежнему мгновенный: он удаляет ключ целиком.
+    #
+    # Множество зрителей ссылки продлевается тем же шагом. Оно живёт ровно
+    # столько же, и без этого истекало посреди просмотра: права зритель
+    # сохранял, а из множества выпадал — вместе с ним переставал работать
+    # лимит одновременных зрителей (count_viewers возвращал 0 и пускал
+    # следующего) и занижалась метрика. У просмотра из панели ссылки нет,
+    # там продлевать нечего.
     ttl = get_settings().view_cookie_ttl_minutes * 60
-    await get_redis().expire(f"{_VIEWER_PREFIX}{viewer_id}", ttl)
+    pipe = get_redis().pipeline()
+    pipe.expire(f"{_VIEWER_PREFIX}{viewer_id}", ttl)
+    if link_id != OPERATOR_GRANT:
+        pipe.expire(f"{_LINK_VIEWERS_PREFIX}{link_id}", ttl)
+    await pipe.execute()
     return response

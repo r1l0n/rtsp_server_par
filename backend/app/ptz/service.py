@@ -250,6 +250,20 @@ async def press(camera: Camera, direction: str, holder: str) -> Result:
     settings = get_settings()
     heartbeat = _heartbeat_ms(settings.ptz_move_seconds)
 
+    # Направление разбираем до захвата камеры. Разбор ничего не требует, кроме
+    # самой строки, а мусорный запрос не должен ни занимать управление, ни
+    # доходить до Redis: раньше неизвестное направление камеру захватывало, а
+    # обратно не отпускало — и следующие ptz_hold_seconds пульт был заблокирован
+    # ни для кого. Ровно то, чего не должно происходить и с неисправной камерой
+    # (см. lock.release ниже).
+    try:
+        velocity = Vector.from_direction(direction)
+    except ValueError:
+        return Result(
+            ok=False, reason="error", message="Неизвестное направление.",
+            heartbeat_ms=heartbeat,
+        )
+
     acquired, retry_after = await lock.acquire(camera.id, holder, settings.ptz_hold_seconds)
     if not acquired:
         # К камере не ходим вовсе: чужие нажатия не должны создавать трафик.
@@ -260,11 +274,6 @@ async def press(camera: Camera, direction: str, holder: str) -> Result:
             retry_after_ms=retry_after,
             heartbeat_ms=heartbeat,
         )
-
-    try:
-        velocity = Vector.from_direction(direction)
-    except ValueError:
-        return Result(ok=False, reason="error", message="Неизвестное направление.")
 
     try:
         driver, target = await _resolve(camera)

@@ -15,6 +15,7 @@ import uuid
 from typing import ClassVar
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app import invites, mail
 from app.config import Settings
@@ -147,6 +148,39 @@ def test_email_escapes_html_in_names() -> None:
     _, html_body = invites._render_email(_invitation(), "T", inviter)
     assert "<script>" not in html_body
     assert "&lt;script&gt;" in html_body
+
+
+@pytest.mark.parametrize("field", ["greeting", "lead", "button_label", "fine_print", "footer"])
+def test_every_text_field_of_the_letter_is_escaped(field: str) -> None:
+    """Контракт wrap_html: экранируются все поля, без исключений.
+
+    Раньше `greeting` и `button_label` экранировались, а `lead`, `fine_print`
+    и `footer` — нет, и нигде это не было записано. Следующий, кто пропустит
+    через `lead` название камеры, получил бы HTML-инъекцию в письмо, которое
+    читают вне контекста CSP.
+    """
+    fields: dict[str, str] = {
+        "greeting": "Здравствуйте,",
+        "lead": "текст",
+        "button_label": "Кнопка",
+        "fine_print": "мелким шрифтом",
+        "footer": "подпись",
+    }
+    fields[field] = "<script>alert(1)</script>"
+
+    body = mail.wrap_html(url="https://cam.test/invite/T", **fields)
+
+    assert "<script>" not in body
+    assert "&lt;script&gt;" in body
+
+
+def test_names_are_not_escaped_twice() -> None:
+    """Амперсанд в названии компании должен доехать до читателя как есть."""
+    inviter = User(id=uuid.uuid4(), email="a@b.ru", full_name="Иванов & Партнёры")
+    _, html_body = invites._render_email(_invitation(), "T", inviter)
+
+    assert "Иванов &amp; Партнёры" in html_body
+    assert "&amp;amp;" not in html_body
 
 
 # ─── Состояние приглашения ───────────────────────────────────────────────────
@@ -535,3 +569,92 @@ def test_password_file_wins_over_env_variable(tmp_path) -> None:
     secret_file.write_text("из-файла\n", encoding="utf-8")
     settings = Settings(smtp_password="из-переменной", smtp_password_file=secret_file)
     assert settings.smtp_secret == "из-файла"
+
+
+# ─── Приём приглашения: гонка на уникальном индексе ──────────────────────────
+class _SessionWhereInsertHitsTheIndex:
+    """Сессия, у которой вставка упирается в уникальный индекс users.email.
+
+    Так выглядит двойной клик по ссылке из письма: обе попытки проходят
+    проверку «такого адреса ещё нет», а на вставке вторая упирается в индекс.
+    """
+
+    def __init__(self) -> None:
+        self.rolled_back = False
+
+    async def scalar(self, *args: object, **kwargs: object) -> None:
+        return None  # адрес свободен — проверка запросом проходит
+
+    def add(self, instance: object) -> None:
+        pass
+
+    async def flush(self) -> None:
+        raise IntegrityError(
+            "INSERT INTO users", {}, Exception("duplicate key value violates ux_users_email")
+        )
+
+    async def rollback(self) -> None:
+        self.rolled_back = True
+
+
+def _fresh_invitation() -> Invitation:
+    return Invitation(
+        email="new@company.ru",
+        full_name="Новый Сотрудник",
+        role=Role.operator,
+        token_hash="0" * 64,
+        expires_at=dt.datetime.now(dt.UTC) + dt.timedelta(hours=72),
+    )
+
+
+async def test_simultaneous_acceptance_explains_itself_instead_of_crashing() -> None:
+    """Второй запрос должен получить объяснение, а не страницу 500."""
+    session = _SessionWhereInsertHitsTheIndex()
+
+    with pytest.raises(invites.InviteError) as failure:
+        await invites.accept(
+            session,  # type: ignore[arg-type]
+            _fresh_invitation(),
+            password_hash="argon2-хеш",
+            full_name="",
+        )
+
+    assert str(failure.value) == invites.EMAIL_TAKEN
+
+
+async def test_a_failed_insert_leaves_the_session_usable() -> None:
+    """Без отката транзакция остаётся прерванной.
+
+    Тогда следующее обращение к сессии — хоть рендер страницы с ошибкой,
+    хоть закрытие зависимостью FastAPI — падает уже с PendingRollbackError,
+    и понятное сообщение всё равно не доезжает до человека.
+    """
+    session = _SessionWhereInsertHitsTheIndex()
+
+    with pytest.raises(invites.InviteError):
+        await invites.accept(
+            session,  # type: ignore[arg-type]
+            _fresh_invitation(),
+            password_hash="argon2-хеш",
+            full_name="",
+        )
+
+    assert session.rolled_back
+
+
+async def test_taken_address_reads_the_same_by_both_paths() -> None:
+    """Проверка запросом и срабатывание индекса ведут в одно состояние."""
+
+    class _SessionWithTheAddressTaken(_SessionWhereInsertHitsTheIndex):
+        async def scalar(self, *args: object, **kwargs: object) -> User:
+            return User(email="new@company.ru", password_hash="x")
+
+    with pytest.raises(invites.InviteError) as failure:
+        await invites.accept(
+            _SessionWithTheAddressTaken(),  # type: ignore[arg-type]
+            _fresh_invitation(),
+            password_hash="argon2-хеш",
+            full_name="",
+        )
+
+    assert str(failure.value) == invites.EMAIL_TAKEN

@@ -8,7 +8,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import audit
@@ -120,8 +120,22 @@ async def _open_stream(
     viewer_id = request.cookies.get(VIEW_COOKIE) or new_viewer_id()
     await grant(viewer_id, camera.mtx_path, link.id, ttl)
 
-    link.view_count += 1
-    link.last_viewed_at = dt.datetime.now(dt.UTC)
+    # Считает база, а не Python. `link.view_count += 1` — это чтение, сложение
+    # и запись тремя шагами: два одновременных открытия ссылки читают одно и
+    # то же значение и записывают одно и то же n+1, и один просмотр пропадает.
+    # У ссылки из рассылки, которую открывают разом, расхождение заметное.
+    #
+    # synchronize_session=False: объект `link` после этого места не читается,
+    # а обновлять его в памяти ради одного счётчика — лишний запрос.
+    await db.execute(
+        update(ShareLink)
+        .where(ShareLink.id == link.id)
+        .values(
+            view_count=ShareLink.view_count + 1,
+            last_viewed_at=dt.datetime.now(dt.UTC),
+        )
+        .execution_options(synchronize_session=False)
+    )
     db.add(
         ViewSession(
             link_id=link.id,
