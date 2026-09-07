@@ -134,7 +134,11 @@ async def create(
 async def load(sid: str | None) -> SessionData | None:
     if not sid:
         return None
-    raw = await get_redis().hgetall(_key(sid))
+    return _from_hash(sid, await get_redis().hgetall(_key(sid)))
+
+
+def _from_hash(sid: str, raw: dict[str, str]) -> SessionData | None:
+    """Сессия из хеша Redis. Пустой хеш — сессии нет (истекла или снята)."""
     if not raw:
         return None
     return SessionData(
@@ -163,9 +167,14 @@ async def touch(session: SessionData) -> None:
 
 
 async def delete(sid: str) -> None:
+    """Снимает одну сессию.
+
+    Сначала читает её, чтобы узнать владельца и вычистить его индекс.
+    Массовое снятие (`delete_all_for_user`) сюда не ходит: там владелец
+    известен заранее, и это чтение было бы лишним обменом на каждую сессию.
+    """
     session = await load(sid)
-    redis = get_redis()
-    pipe = redis.pipeline()
+    pipe = get_redis().pipeline()
     pipe.delete(_key(sid))
     if session is not None:
         pipe.srem(_index_key(session.user_id), sid)
@@ -192,13 +201,27 @@ async def rotate(session: SessionData, *, pending_2fa: bool | None = None) -> Se
 
 
 async def list_for_user(user_id: uuid.UUID | str) -> list[SessionData]:
+    """Все живые сессии пользователя.
+
+    Читаются одним конвейером, а не запросом на каждый идентификатор: страницу
+    профиля открывает человек с десятком сессий, и это была дюжина
+    последовательных обменов с Redis там, где хватает двух.
+    """
     redis = get_redis()
     index = _index_key(str(user_id))
-    sids = await redis.smembers(index)
+    sids = sorted(await redis.smembers(index))
+    if not sids:
+        return []
+
+    pipe = redis.pipeline()
+    for sid in sids:
+        pipe.hgetall(_key(sid))
+    rows = await pipe.execute()
+
     sessions: list[SessionData] = []
     stale: list[str] = []
-    for sid in sids:
-        session = await load(sid)
+    for sid, raw in zip(sids, rows, strict=True):
+        session = _from_hash(sid, raw)
         if session is None:
             stale.append(sid)
         else:
@@ -209,10 +232,16 @@ async def list_for_user(user_id: uuid.UUID | str) -> list[SessionData]:
 
 
 async def delete_all_for_user(user_id: uuid.UUID | str, *, except_sid: str | None = None) -> int:
-    removed = 0
-    for session in await list_for_user(user_id):
-        if session.sid == except_sid:
-            continue
-        await delete(session.sid)
-        removed += 1
-    return removed
+    """Гасит сессии пользователя, кроме указанной. Возвращает число снятых."""
+    owner = str(user_id)
+    doomed = [s.sid for s in await list_for_user(owner) if s.sid != except_sid]
+    if not doomed:
+        return 0
+
+    redis = get_redis()
+    pipe = redis.pipeline()
+    for sid in doomed:
+        pipe.delete(_key(sid))
+    pipe.srem(_index_key(owner), *doomed)
+    await pipe.execute()
+    return len(doomed)

@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 
 from ..auth.sessions import SESSION_COOKIE, SessionData, ttl_for
 from ..config import get_settings
+from ..internal.authz import VIEW_COOKIE
 from ..models import Role, User
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -235,6 +236,36 @@ def set_session_cookie(response: Response, session: SessionData) -> None:
 
 def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, path="/")
+
+
+def set_view_cookie(response: Response, viewer_id: str, max_age: int) -> None:
+    """Cookie доступа к медиа. Её и только её видит forward_auth.
+
+    SameSite=None, а не Lax, — иначе не работает то, ради чего заведён
+    `/embed/`. Панель выдаёт готовый `<iframe src=".../embed/...">` для чужого
+    сайта, но cookie с Lax браузер шлёт только при навигации верхнего уровня:
+    внутри стороннего iframe запросы за сегментами HLS и за WHEP уходили без
+    неё, forward_auth отвечал 403, и зритель видел чёрный экран.
+
+    На CSRF это не влияет. Публичный пульт закрыт не SameSite, а тем, что тело
+    команды идёт как JSON и требует preflight, которого чужая страница не
+    получит: CORS мы не разрешаем нигде. Сессия панели (SESSION_COOKIE)
+    остаётся Lax — её это послабление не касается.
+
+    Браузер отвергает SameSite=None без Secure целиком, поэтому в разработке
+    без TLS откатываемся на Lax: там встраивание в чужой домен всё равно
+    не проверить.
+    """
+    secure = get_settings().session_cookie_secure
+    response.set_cookie(
+        VIEW_COOKIE,
+        viewer_id,
+        max_age=max_age,
+        httponly=True,
+        secure=secure,
+        samesite="none" if secure else "lax",
+        path="/",
+    )
 
 
 def redirect(url: str, *, status_code: int = 303) -> RedirectResponse:

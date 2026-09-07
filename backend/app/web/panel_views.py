@@ -6,7 +6,7 @@ import base64
 import datetime as dt
 import secrets
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import (
@@ -16,7 +16,7 @@ from fastapi.responses import (
     RedirectResponse,
     Response,
 )
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import audit
@@ -43,7 +43,9 @@ from ..models import Camera, CameraStatus, PtzDriver, Role, ShareLink, StreamPro
 from ..ptz import service as ptz
 from ..ptz.base import PtzError
 from ..ptz.lock import panel_holder
-from .templating import notice, redirect, render
+from ..ptz.transport import forget_auth
+from .forms import parse_cidrs, parse_enum
+from .templating import notice, redirect, render, set_view_cookie
 
 log = get_logger("panel")
 router = APIRouter(tags=["panel"])
@@ -57,7 +59,7 @@ TTL_CHOICES: dict[str, int] = {
 }
 
 
-def _visible_cameras(user: User):
+def _visible_cameras(user: User) -> Select[tuple[Camera]]:
     """Оператор видит свои камеры, администратор — все."""
     query = select(Camera).order_by(Camera.name)
     if user.role is not Role.admin:
@@ -78,15 +80,16 @@ async def _get_camera(db: AsyncSession, camera_id: uuid.UUID, user: User) -> Cam
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, db: DbSession, user: CurrentUser) -> HTMLResponse:
     cameras = list(await db.scalars(_visible_cameras(user)))
-    link_counts = dict(
-        (
+    link_counts: dict[uuid.UUID, int] = {
+        camera_id: count
+        for camera_id, count in (
             await db.execute(
                 select(ShareLink.camera_id, func.count(ShareLink.id))
                 .where(ShareLink.revoked_at.is_(None))
                 .group_by(ShareLink.camera_id)
             )
         ).all()
-    )
+    }
     return render(
         request,
         "cameras.html",
@@ -161,7 +164,7 @@ async def camera_preview(
         host=target.host,
         port=target.port,
         mtx_path=new_mtx_path(),
-        profile=StreamProfile(profile),
+        profile=parse_enum(StreamProfile, profile, StreamProfile.passthrough),
         on_demand=on_demand == "on",
         audio_enabled=audio_enabled == "on",
         is_enabled=True,
@@ -211,10 +214,11 @@ async def camera_create(
     profile: Annotated[str, Form()] = StreamProfile.passthrough.value,
 ) -> Response:
     name = name.strip()
-    if not name:
+    chosen_profile = parse_enum(StreamProfile, profile)
+    if not name or chosen_profile is None:
         return render(
             request, "camera_form.html", status_code=400, user=user, camera=None,
-            error="Укажите название камеры",
+            error="Укажите название камеры" if not name else "Неизвестный профиль потока",
             form=_camera_form_values(
                 name, description, on_demand, audio_enabled, profile, rtsp_url
             ),
@@ -238,7 +242,7 @@ async def camera_create(
         host=target.host,
         port=target.port,
         mtx_path=new_mtx_path(),
-        profile=StreamProfile(profile),
+        profile=chosen_profile,
         on_demand=on_demand == "on",
         audio_enabled=audio_enabled == "on",
         status=CameraStatus.unknown,
@@ -265,7 +269,7 @@ async def camera_create(
 
 
 async def _render_detail(
-    request: Request, db: AsyncSession, user: User, camera: Camera, **extra: object
+    request: Request, db: AsyncSession, user: User, camera: Camera, **extra: Any
 ) -> HTMLResponse:
     """Страница камеры. Собрана в одном месте: её рендерят четыре обработчика,
     и разъехавшийся контекст молча ломал бы то список ссылок, то диагностику."""
@@ -324,14 +328,21 @@ async def camera_update(
 ) -> Response:
     camera = await _get_camera(db, camera_id, user)
 
+    chosen_profile = parse_enum(StreamProfile, profile)
+    if chosen_profile is None:
+        return render(
+            request, "camera_form.html", status_code=400, user=user, camera=camera,
+            error="Неизвестный профиль потока",
+        )
+
     changed: dict[str, object] = {}
     camera.name = name.strip() or camera.name
     camera.description = description.strip()[:2000]
     camera.on_demand = on_demand == "on"
     camera.audio_enabled = audio_enabled == "on"
     camera.is_enabled = is_enabled == "on"
-    if camera.profile.value != profile:
-        camera.profile = StreamProfile(profile)
+    if camera.profile is not chosen_profile:
+        camera.profile = chosen_profile
         changed["profile"] = profile
 
     # Пустое поле URL означает «оставить прежний» — так пароль камеры не нужно
@@ -479,10 +490,10 @@ async def camera_set_profile(
     ровно тот случай, когда совет не выполняют.
     """
     camera = await _get_camera(db, camera_id, user)
-    try:
-        camera.profile = StreamProfile(profile)
-    except ValueError:
-        raise Forbidden("Неизвестный профиль потока") from None
+    chosen_profile = parse_enum(StreamProfile, profile)
+    if chosen_profile is None:
+        raise Forbidden("Неизвестный профиль потока")
+    camera.profile = chosen_profile
 
     await audit.record(
         db, audit.CAMERA_UPDATED, actor_id=user.id, target_type="camera",
@@ -504,16 +515,12 @@ OPERATOR_VIEW_TTL_SECONDS = 15 * 60
 
 
 def _set_view_cookie(response: Response, viewer_id: str) -> None:
-    """Cookie зрителя. Её и только её видит forward_auth на медиа-запросах."""
-    response.set_cookie(
-        VIEW_COOKIE,
-        viewer_id,
-        max_age=OPERATOR_VIEW_TTL_SECONDS,
-        httponly=True,
-        secure=get_settings().session_cookie_secure,
-        samesite="lax",
-        path="/",
-    )
+    """Cookie зрителя. Её и только её видит forward_auth на медиа-запросах.
+
+    Атрибуты те же, что у публичной страницы: cookie одна на всех, и разные
+    политики в двух местах молча затирали бы друг друга.
+    """
+    set_view_cookie(response, viewer_id, OPERATOR_VIEW_TTL_SECONDS)
 
 
 @router.post("/cameras/{camera_id}/live/ticket")
@@ -626,6 +633,7 @@ def _apply_ptz_form(
     получать невнятный отказ вместо повторного опознания.
     """
     before = (camera.ptz_driver, camera.ptz_port, camera.ptz_tls, camera.ptz_channel)
+    port_before = ptz.default_port(camera)
 
     camera.ptz_enabled = enabled == "on"
     if driver in {item.value for item in PtzDriver}:
@@ -649,6 +657,11 @@ def _apply_ptz_form(
     ):
         camera.ptz_meta = None
         camera.ptz_checked_at = None
+        # Кэш опознания лежит в БД, а кэш Digest — в памяти процесса, и без
+        # этого он пережил бы смену пароля: камера отвечала бы отказом до
+        # перезапуска api, причём с текстом «проверьте учётные данные».
+        for stale_port in {port_before, ptz.default_port(camera)}:
+            forget_auth(camera.host, stale_port)
 
 
 @router.post("/cameras/{camera_id}/ptz/check", response_class=HTMLResponse)
@@ -765,6 +778,17 @@ async def link_create(
 ) -> HTMLResponse:
     camera = await _get_camera(db, camera_id, user)
 
+    # Опечатку в подсети `ip_allowed` молча пропускает, и ссылка переставала
+    # работать для всех — а оператор об этом не узнавал.
+    cidrs, bad_cidrs = parse_cidrs(allowed_cidrs)
+    if bad_cidrs:
+        return await _render_detail(
+            request, db, user, camera,
+            error="Не похоже на адрес или подсеть: "
+                  + ", ".join(bad_cidrs)
+                  + ". Укажите через запятую, например 203.0.113.7 или 203.0.113.0/24.",
+        )
+
     hours = TTL_CHOICES.get(ttl, get_settings().default_link_ttl_hours)
     expires_at = (
         dt.datetime.now(dt.UTC) + dt.timedelta(hours=hours) if hours else None
@@ -778,7 +802,7 @@ async def link_create(
         token_hash=hash_token(token),
         expires_at=expires_at,
         max_concurrent=max(0, min(max_concurrent, 10_000)),
-        allowed_cidrs=[c.strip() for c in allowed_cidrs.split(",") if c.strip()],
+        allowed_cidrs=cidrs,
         password_hash=hash_password(link_password) if link_password else None,
         # Галочка на ссылке не может включить PTZ у камеры, где его нет:
         # подделанная форма не должна давать больше, чем показывает панель.
@@ -820,15 +844,25 @@ async def link_rotate(
     раз» технически невозможно, и единственный честный ответ на это —
     перевыпустить. Старый адрес перестаёт работать: иначе операция была бы
     способом бесконтрольно размножать действующие ссылки.
+
+    Отозванную ссылку не воскрешаем. Раньше перевыпуск снимал отзыв молча —
+    кнопка называлась «Перевыпустить», предупреждение говорило только про
+    старый адрес, а в журнале оставалась запись `link.rotated`. Отзыв — это
+    решение «доступ по этому адресу закрыт», и отменяться нажатием соседней
+    кнопки оно не должно.
     """
     link = await db.get(ShareLink, link_id)
     if link is None:
         raise Forbidden("Ссылка не найдена")
     camera = await _get_camera(db, link.camera_id, user)
+    if link.revoked_at is not None:
+        raise Forbidden(
+            "Ссылка отозвана — перевыпуск её не восстанавливает. "
+            "Выдайте новую ссылку на эту камеру."
+        )
 
     token = generate_token()
     link.token_hash = hash_token(token)
-    link.revoked_at = None
 
     await audit.record(
         db, audit.LINK_ROTATED, actor_id=user.id, target_type="link", target_id=str(link.id),

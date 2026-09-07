@@ -25,14 +25,25 @@ jobs:
       - name: Линтер
         run: ruff check app alembic tests
 
+      # Строгий режим включён в pyproject.toml, но до сих пор нигде не
+      # запускался — за это время накопился 21 разрыв типов, среди которых
+      # были и настоящие. Теперь проверка обязательная.
+      - name: Типы
+        run: mypy app
+
       # Тесты не требуют ни Postgres, ни Redis: Redis подменяется на
       # in-memory, схема сверяется с миграциями офлайн через рендер SQL.
       - name: Тесты
         run: pytest -q
 
+      # На обычных прогонах — справочно: новая CVE в транзитивной зависимости
+      # появляется независимо от нас и часто без готового исправления, и
+      # красная сборка на ровном месте приучает не смотреть на неё вовсе.
+      # А вот выпускать релиз с известной дырой нельзя, поэтому на теге та же
+      # проверка обязательна.
       - name: Уязвимости в зависимостях
         run: pip-audit --strict --desc
-        continue-on-error: true
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
   image:
     runs-on: ubuntu-latest
@@ -42,12 +53,15 @@ jobs:
       - name: Сборка образа
         run: docker build -t rtspgw-api:ci backend
 
+      # Та же логика, что и у pip-audit: на теге находки роняют сборку,
+      # на обычном пуше остаются в логе.
       - name: Сканирование образа
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: rtspgw-api:ci
           severity: HIGH,CRITICAL
-          exit-code: "0"
+          ignore-unfixed: true
+          exit-code: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
 
   scripts:
     runs-on: ubuntu-latest
@@ -63,6 +77,9 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          # Ошибки роняют сборку: это не стилистика, а неработающий скрипт.
+          shellcheck --severity=error install.sh uninstall.sh ops/*.sh
+          # Предупреждения — справочно, как и было.
           shellcheck --severity=warning install.sh uninstall.sh ops/*.sh || true
 
       - name: Тесты установщика

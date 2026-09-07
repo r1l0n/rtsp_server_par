@@ -323,6 +323,10 @@
           {%- if link.ptz_allowed %} · управление обзором{% endif %}
         </div>
         <div class="row-actions row-actions-left">
+          {# Отозванную ссылку не перевыпускаем: отзыв — решение, а не пауза.
+             Сервер это тоже не пропустит, здесь кнопка просто не показывается,
+             чтобы оператор не упирался в отказ. #}
+          {% if not link.revoked_at %}
           <form method="post" action="/links/{{ link.id }}/rotate" class="inline"
                 data-confirm="Перевыпустить токен? Прежний адрес этой ссылки перестанет работать, зрителей отключит.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -330,7 +334,6 @@
               <svg class="i" aria-hidden="true"><use href="#i-refresh"></use></svg>Перевыпустить
             </button>
           </form>
-          {% if not link.revoked_at %}
           <form method="post" action="/links/{{ link.id }}/revoke" class="inline">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" class="btn btn-quiet">Отозвать</button>

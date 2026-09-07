@@ -64,9 +64,19 @@ def _auth(target: Target) -> httpx.DigestAuth:
     return auth
 
 
-def forget_auth(target: Target) -> None:
-    """Сбрасывает кэш Digest — после смены пароля камеры."""
-    _auth_cache.pop((target.host, target.port, target.username), None)
+def forget_auth(host: str, port: int) -> None:
+    """Забывает кэш Digest для адреса — после смены учётных данных камеры.
+
+    Чистим всё по паре host:port, не разбирая логин: старый логин лежит
+    зашифрованным, и вызывающему он не известен, а лишняя запись в кэше
+    всё равно бесполезна.
+
+    Кэш живёт в памяти процесса и переживает правку камеры в панели. Без
+    этого вызова после смены пароля PTZ мы продолжали бы предъявлять камере
+    старый challenge и получать невнятный отказ до перезапуска api.
+    """
+    for key in [k for k in _auth_cache if k[0] == host and k[1] == port]:
+        _auth_cache.pop(key, None)
 
 
 async def request(

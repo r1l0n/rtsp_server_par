@@ -8,7 +8,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import audit as audit_log
@@ -19,6 +19,7 @@ from ..config import get_settings
 from ..mail import MailError, MailNotConfigured
 from ..middleware import client_ip
 from ..models import AuditLog, Invitation, RecoveryCode, Role, User
+from .forms import parse_enum
 from .templating import notice, redirect, render
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -124,9 +125,8 @@ async def user_invite(
             error="Слишком много приглашений за час. Повторите позже.",
         )
 
-    try:
-        chosen_role = Role(role)
-    except ValueError:
+    chosen_role = parse_enum(Role, role)
+    if chosen_role is None:
         return await _users_page(request, db, admin, status_code=400, error="Неизвестная роль.")
 
     try:
@@ -219,7 +219,10 @@ async def user_role(
     if target.id == admin.id:
         raise Forbidden("Нельзя изменить собственную роль")
 
-    target.role = Role(role)
+    chosen_role = parse_enum(Role, role)
+    if chosen_role is None:
+        raise Forbidden("Неизвестная роль")
+    target.role = chosen_role
     await audit_log.record(
         db, audit_log.USER_UPDATED, actor_id=admin.id, target_type="user",
         target_id=str(target.id), ip=client_ip(request), meta={"role": role},
@@ -260,15 +263,51 @@ async def audit_view(
     db: DbSession,
     admin: RequireAdmin,
     action: str = "",
-    page: int = 0,
+    before: str = "",
+    after: str = "",
 ) -> HTMLResponse:
-    page = max(0, page)
-    query = select(AuditLog).order_by(AuditLog.created_at.desc())
+    """Журнал, страница за страницей.
+
+    Пагинация по курсору, а не по OFFSET: `audit_log` — таблица только на
+    добавление, в неё пишется каждый вход и каждый просмотр по ссылке, и
+    через год работы OFFSET на дальней странице заставлял PostgreSQL
+    прочитать и выбросить сотни тысяч строк. Курсор — пара
+    (created_at, id) крайней показанной записи, и она же ложится в индекс,
+    поэтому стоимость страницы перестаёт зависеть от её номера.
+
+    Курсоров два, чтобы не потерять кнопку «Назад»: `before` листает вперёд,
+    `after` — назад, разворачивая сортировку и переворачивая список обратно.
+    Лишняя запись сверх страницы запрашивается только затем, чтобы понять,
+    есть ли ещё, — показывать её не нужно.
+    """
+    query = select(AuditLog)
     if action:
         query = query.where(AuditLog.action == action)
-    query = query.offset(page * AUDIT_PAGE_SIZE).limit(AUDIT_PAGE_SIZE)
 
-    entries = list(await db.scalars(query))
+    columns = tuple_(AuditLog.created_at, AuditLog.id)
+    back_cursor, forward_cursor = _parse_cursor(after), _parse_cursor(before)
+    going_back = back_cursor is not None
+
+    # Справа обычный кортеж значений: SQLAlchemy сам разложит его в
+    # параметры нужных типов, и получится «(created_at, id) > (:a, :b)».
+    if going_back:
+        query = query.where(columns > back_cursor).order_by(
+            AuditLog.created_at.asc(), AuditLog.id.asc()
+        )
+    else:
+        if forward_cursor is not None:
+            query = query.where(columns < forward_cursor)
+        query = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+
+    rows = list(await db.scalars(query.limit(AUDIT_PAGE_SIZE + 1)))
+    has_more = len(rows) > AUDIT_PAGE_SIZE
+    entries = rows[:AUDIT_PAGE_SIZE]
+    if going_back:
+        entries.reverse()
+        has_prev, has_next = has_more, True
+    else:
+        has_prev, has_next = forward_cursor is not None, has_more
+
     actors = {
         u.id: u.email
         for u in await db.scalars(
@@ -282,6 +321,23 @@ async def audit_view(
         entries=entries,
         actors=actors,
         action=action,
-        page=page,
-        has_next=len(entries) == AUDIT_PAGE_SIZE,
+        has_prev=has_prev and bool(entries),
+        has_next=has_next and bool(entries),
+        prev_cursor=_format_cursor(entries[0]) if entries else "",
+        next_cursor=_format_cursor(entries[-1]) if entries else "",
     )
+
+
+def _format_cursor(entry: AuditLog) -> str:
+    return f"{entry.created_at.isoformat()}|{entry.id}"
+
+
+def _parse_cursor(raw: str) -> tuple[dt.datetime, uuid.UUID] | None:
+    """Курсор из адресной строки. Мусор равносилен его отсутствию."""
+    timestamp, separator, entry_id = raw.partition("|")
+    if not separator:
+        return None
+    try:
+        return dt.datetime.fromisoformat(timestamp), uuid.UUID(entry_id)
+    except ValueError:
+        return None

@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import datetime as dt
 import ipaddress
+import json
 import re
 import secrets
 import uuid
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request, Response
@@ -28,6 +30,7 @@ from sqlalchemy import select
 from ..config import get_settings
 from ..db import get_sessionmaker
 from ..logging_setup import get_logger
+from ..middleware import client_ip
 from ..models import Camera, ShareLink
 from ..redis_client import get_redis
 
@@ -110,6 +113,33 @@ async def count_viewers(link_id: uuid.UUID) -> int:
     return int(await get_redis().scard(f"{_LINK_VIEWERS_PREFIX}{link_id}"))
 
 
+async def count_all_viewers() -> int:
+    """Сколько зрителей смотрит по публичным ссылкам прямо сейчас.
+
+    Считается по тем же множествам, на которых держится лимит одновременных
+    зрителей, — это единственное место, где состояние настоящее. Метрика
+    раньше бралась из таблицы view_sessions и показывала не зрителей, а число
+    открытий страницы за последние минуты.
+    """
+    redis = get_redis()
+    total = 0
+    async for key in redis.scan_iter(match=f"{_LINK_VIEWERS_PREFIX}*", count=200):
+        total += int(await redis.scard(key))
+    return total
+
+
+async def viewer_counted(link_id: uuid.UUID, viewer_id: str) -> bool:
+    """Учтён ли этот зритель в лимите одновременных просмотров.
+
+    Нужно, чтобы перезагрузка страницы не выглядела приходом ещё одного
+    зрителя: он уже в множестве, и без этой проверки ссылка с лимитом 1
+    отказывала бы собственному зрителю при первом же F5.
+    """
+    if not viewer_id:
+        return False
+    return bool(await get_redis().sismember(f"{_LINK_VIEWERS_PREFIX}{link_id}", viewer_id))
+
+
 async def invalidate_link(link_id: uuid.UUID) -> None:
     """Сбрасывает кэш решения — следующий же медиа-запрос пойдёт в БД."""
     await get_redis().delete(f"{_LINK_CACHE_PREFIX}{link_id}")
@@ -154,16 +184,32 @@ def ip_allowed(ip: str, cidrs: list[str]) -> bool:
 
 
 # ─── проверка ────────────────────────────────────────────────────────────────
-async def link_is_valid(link_id: uuid.UUID) -> bool:
-    """Действительна ли ссылка. Результат кэшируется на короткое время."""
+@dataclass(frozen=True, slots=True)
+class LinkAccess:
+    """Всё, что нужно знать о ссылке на каждом медиа-запросе."""
+
+    valid: bool
+    #: Подсети, которым владелец разрешил смотреть. Пусто — ограничения нет.
+    cidrs: tuple[str, ...] = ()
+
+
+async def link_access(link_id: uuid.UUID) -> LinkAccess:
+    """Состояние ссылки. Результат кэшируется на короткое время.
+
+    Список подсетей лежит здесь же, а не проверяется только при открытии
+    страницы: без этого ограничение по адресу обходилось перезагрузкой —
+    зритель, однажды открывший ссылку с разрешённого адреса, дальше смотрел
+    её откуда угодно, потому что грант в Redis продлевался сам.
+    """
     settings = get_settings()
     redis = get_redis()
     cache_key = f"{_LINK_CACHE_PREFIX}{link_id}"
 
     cached = await redis.get(cache_key)
     if cached is not None:
-        return cached == "1"
+        return _decode_access(cached)
 
+    cidrs: tuple[str, ...] = ()
     async with get_sessionmaker()() as session:
         link = await session.scalar(select(ShareLink).where(ShareLink.id == link_id))
         valid = link is not None and link.revoked_at is None
@@ -172,12 +218,47 @@ async def link_is_valid(link_id: uuid.UUID) -> bool:
         if valid and link is not None:
             camera = await session.get(Camera, link.camera_id)
             valid = camera is not None and camera.is_enabled
+        if valid and link is not None:
+            cidrs = tuple(link.allowed_cidrs or ())
 
+    access = LinkAccess(valid=valid, cidrs=cidrs)
     # Отрицательный ответ кэшируем короче: ошибочный запрет должен уходить
     # быстро, а разрешение и так снимается явной инвалидацией.
     ttl = settings.authz_cache_seconds if valid else 5
-    await redis.set(cache_key, "1" if valid else "0", ex=ttl)
-    return valid
+    await redis.set(cache_key, _encode_access(access), ex=ttl)
+    return access
+
+
+def _encode_access(access: LinkAccess) -> str:
+    return json.dumps({"v": access.valid, "c": list(access.cidrs)})
+
+
+def _decode_access(raw: str) -> LinkAccess:
+    """Разбор кэша. Битое значение считаем отсутствующим разрешением.
+
+    Формат кэша менялся (раньше это была строка «1»/«0»), и после обновления
+    в Redis какое-то время лежат записи обоих видов. Старую запись разбираем
+    до json намеренно: `json.loads("1")` не падает, а возвращает число, и
+    ссылка молча оказалась бы недействительной на весь срок жизни кэша.
+    """
+    if raw in ("0", "1"):
+        return LinkAccess(valid=raw == "1")
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return LinkAccess(valid=False)
+    if not isinstance(data, dict):
+        return LinkAccess(valid=False)
+    cidrs = data.get("c") or []
+    return LinkAccess(
+        valid=bool(data.get("v")),
+        cidrs=tuple(str(item) for item in cidrs) if isinstance(cidrs, list) else (),
+    )
+
+
+async def link_is_valid(link_id: uuid.UUID) -> bool:
+    """Действительна ли ссылка — без учёта ограничения по адресу."""
+    return (await link_access(link_id)).valid
 
 
 @router.get("/internal/authz", include_in_schema=False)
@@ -209,8 +290,13 @@ async def authz(request: Request) -> Response:
     except ValueError:
         return _deny("grant_is_not_a_link_id", path=mtx_path)
 
-    if not await link_is_valid(link_id):
+    access = await link_access(link_id)
+    if not access.valid:
         return _deny("link_invalid", path=mtx_path, link_id=str(link_id))
+
+    # Адрес приходит из X-Real-IP, который Caddy проставляет сам (см. Caddyfile).
+    if not ip_allowed(client_ip(request), list(access.cidrs)):
+        return _deny("ip_not_allowed", path=mtx_path, link_id=str(link_id))
 
     return await _allow(mtx_path, str(link_id), viewer_id)
 

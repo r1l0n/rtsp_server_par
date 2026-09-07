@@ -18,10 +18,49 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from typing import Any
 
 from ..redis_client import get_redis
 
 _PREFIX = "ptz:lock:"
+
+#: Захват или продление — одним шагом.
+#:
+#: Раньше продление шло как GET, а следом EXPIRE, и снятие — как GET, а следом
+#: DELETE. Между двумя командами ключ успевает истечь по TTL и достаться
+#: другому зрителю: первый вариант продлевал чужую блокировку, второй — снимал
+#: её. Окно узкое, но оно ровно там, где идёт борьба за камеру.
+#:
+#: Возвращает {получилось, через сколько миллисекунд пробовать снова}.
+_ACQUIRE = """
+local ttl = tonumber(ARGV[2])
+if redis.call('set', KEYS[1], ARGV[1], 'NX', 'EX', ttl) then
+    return {1, 0}
+end
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    redis.call('expire', KEYS[1], ttl)
+    return {1, 0}
+end
+local remaining = redis.call('pttl', KEYS[1])
+if remaining < 0 then
+    remaining = 1000
+end
+return {0, remaining}
+"""
+
+#: Снятие блокировки, только если она всё ещё за этим владельцем.
+_RELEASE = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+async def _run(source: str, key: str, *args: object) -> Any:
+    """EVAL, а не register_script: объект скрипта запоминает клиента, которым
+    его создали, а клиент здесь ленивый и в тестах подменяется. Пульт шлёт
+    команду раз в 700 мс — лишние полсотни байт на запрос ничего не стоят."""
+    return await get_redis().eval(source, 1, key, *args)
 
 
 def panel_holder(user_id: uuid.UUID) -> str:
@@ -38,28 +77,15 @@ async def acquire(camera_id: uuid.UUID, holder: str, ttl_seconds: int) -> tuple[
     Возвращает (получилось, через сколько миллисекунд пробовать снова).
     Второе значение осмысленно только при отказе.
     """
-    redis = get_redis()
-    key = f"{_PREFIX}{camera_id}"
-
-    if await redis.set(key, holder, nx=True, ex=ttl_seconds):
-        return True, 0
-
-    current = await redis.get(key)
-    if current == holder:
-        await redis.expire(key, ttl_seconds)
-        return True, 0
-
-    # Ключ мог истечь между SET и GET — тогда просто предложим повторить.
-    remaining = await redis.ttl(key)
-    return False, max(1, int(remaining)) * 1000 if remaining and remaining > 0 else 1000
+    # Скрипт уже подставляет разумную паузу вместо отрицательного pttl,
+    # а при успехе возвращает ровно 0 — здесь ничего не поправляем.
+    ok, retry_ms = await _run(_ACQUIRE, f"{_PREFIX}{camera_id}", holder, ttl_seconds)
+    return bool(ok), int(retry_ms)
 
 
 async def release(camera_id: uuid.UUID, holder: str) -> None:
     """Отпускает управление, если оно всё ещё за этим владельцем."""
-    redis = get_redis()
-    key = f"{_PREFIX}{camera_id}"
-    if await redis.get(key) == holder:
-        await redis.delete(key)
+    await _run(_RELEASE, f"{_PREFIX}{camera_id}", holder)
 
 
 async def owner(camera_id: uuid.UUID) -> str | None:

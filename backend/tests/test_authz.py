@@ -9,11 +9,13 @@ import pytest
 from app.internal import authz
 from app.internal.authz import (
     VIEW_COOKIE,
+    LinkAccess,
     count_viewers,
     grant,
     grant_operator,
     ip_allowed,
     new_viewer_id,
+    viewer_counted,
 )
 
 MTX_PATH = "abcdefgh12345678abcdefgh"
@@ -23,18 +25,26 @@ MTX_PATH = "abcdefgh12345678abcdefgh"
 def allow_all_links(monkeypatch: pytest.MonkeyPatch):
     """Проверку ссылки в БД подменяем — здесь тестируется маршрутизация доступа."""
 
-    async def always_valid(link_id: uuid.UUID) -> bool:
-        return True
+    async def always_valid(link_id: uuid.UUID) -> LinkAccess:
+        return LinkAccess(valid=True)
 
-    monkeypatch.setattr(authz, "link_is_valid", always_valid)
+    monkeypatch.setattr(authz, "link_access", always_valid)
 
 
 @pytest.fixture
 def deny_all_links(monkeypatch: pytest.MonkeyPatch):
-    async def never_valid(link_id: uuid.UUID) -> bool:
-        return False
+    async def never_valid(link_id: uuid.UUID) -> LinkAccess:
+        return LinkAccess(valid=False)
 
-    monkeypatch.setattr(authz, "link_is_valid", never_valid)
+    monkeypatch.setattr(authz, "link_access", never_valid)
+
+
+@pytest.fixture
+def links_limited_to_office(monkeypatch: pytest.MonkeyPatch):
+    async def office_only(link_id: uuid.UUID) -> LinkAccess:
+        return LinkAccess(valid=True, cidrs=("203.0.113.0/24",))
+
+    monkeypatch.setattr(authz, "link_access", office_only)
 
 
 def _client():
@@ -170,6 +180,67 @@ def test_ip_filter_rejects_unparsable_address() -> None:
 
 def test_ip_filter_skips_broken_cidr_but_honours_valid_one() -> None:
     assert ip_allowed("203.0.113.7", ["мусор", "203.0.113.0/24"])
+
+
+async def test_viewer_counted_only_after_a_grant() -> None:
+    link_id = uuid.uuid4()
+    viewer = new_viewer_id()
+    assert not await viewer_counted(link_id, viewer)
+    await grant(viewer, MTX_PATH, link_id, ttl_seconds=60)
+    assert await viewer_counted(link_id, viewer)
+    assert not await viewer_counted(link_id, new_viewer_id())
+    assert not await viewer_counted(link_id, "")
+
+
+# ─── Ограничение по адресу действует на каждом медиа-запросе ─────────────────
+async def test_media_denied_from_address_outside_the_allowlist(
+    links_limited_to_office,
+) -> None:
+    """Иначе список подсетей обходился перезагрузкой страницы.
+
+    Грант в Redis живёт своей жизнью и продлевается сам, поэтому проверять
+    адрес только при открытии ссылки недостаточно: зритель, однажды вошедший
+    из офиса, досматривал бы её из дома до бесконечности.
+    """
+    viewer = new_viewer_id()
+    await grant(viewer, MTX_PATH, uuid.uuid4(), ttl_seconds=60)
+
+    with _client() as client:
+        response = client.get(
+            "/internal/authz",
+            headers={"X-Forwarded-Uri": f"/hls/{MTX_PATH}/index.m3u8",
+                     "X-Real-IP": "198.51.100.7"},
+            cookies={VIEW_COOKIE: viewer},
+        )
+    assert response.status_code == 403
+
+
+async def test_media_allowed_from_address_inside_the_allowlist(
+    links_limited_to_office,
+) -> None:
+    viewer = new_viewer_id()
+    await grant(viewer, MTX_PATH, uuid.uuid4(), ttl_seconds=60)
+
+    with _client() as client:
+        response = client.get(
+            "/internal/authz",
+            headers={"X-Forwarded-Uri": f"/hls/{MTX_PATH}/index.m3u8",
+                     "X-Real-IP": "203.0.113.7"},
+            cookies={VIEW_COOKIE: viewer},
+        )
+    assert response.status_code == 200
+
+
+# ─── Кэш решения ─────────────────────────────────────────────────────────────
+def test_cache_survives_the_old_format() -> None:
+    """Во время обновления в Redis лежат записи прежнего вида («1»/«0»)."""
+    assert authz._decode_access("1") == LinkAccess(valid=True)
+    assert authz._decode_access("0") == LinkAccess(valid=False)
+
+
+def test_cache_roundtrip_keeps_the_cidr_list() -> None:
+    access = LinkAccess(valid=True, cidrs=("10.0.0.0/8", "203.0.113.0/24"))
+    assert authz._decode_access(authz._encode_access(access)) == access
 
 
 # ─── Просмотр оператором из панели ───────────────────────────────────────────

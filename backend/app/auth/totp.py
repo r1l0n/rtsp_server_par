@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import io
+import re
 import secrets
 import time
 import uuid
@@ -68,14 +69,32 @@ async def verify_code(secret: str, code: str, user_id: uuid.UUID | str) -> bool:
 
 
 # ─── Коды восстановления ─────────────────────────────────────────────────────
+_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"  # без похожих символов
+#: Форма кода: 'a1b2c-3d4e5'. Нужна, чтобы не перебирать хеши впустую —
+#: см. looks_like_recovery_code.
+_RECOVERY_RE = re.compile(rf"\A[{_ALPHABET}]{{5}}-[{_ALPHABET}]{{5}}\Z")
+
+
 def generate_recovery_codes(count: int = RECOVERY_CODE_COUNT) -> list[str]:
     """Коды вида 'a1b2c-3d4e5'. Показываются пользователю ровно один раз."""
     codes: list[str] = []
-    alphabet = "abcdefghijkmnpqrstuvwxyz23456789"  # без похожих символов
     for _ in range(count):
-        raw = "".join(secrets.choice(alphabet) for _ in range(10))
+        raw = "".join(secrets.choice(_ALPHABET) for _ in range(10))
         codes.append(f"{raw[:5]}-{raw[5:]}")
     return codes
+
+
+def looks_like_recovery_code(code: str) -> bool:
+    """Похоже ли введённое на код восстановления.
+
+    Проверка формы, а не подлинности, и нужна она из-за цены проверки:
+    коды хранятся хешами, искать их по значению нельзя, поэтому кандидат
+    сверяется argon2 с каждым живым кодом — до десяти проверок по ~60 мс
+    на одну попытку. Шестизначный код TOTP кодом восстановления быть не
+    может, и гонять на нём полсекунды процессорного времени незачем:
+    один валидный пароль давал заметно больше нагрузки, чем обычный вход.
+    """
+    return bool(_RECOVERY_RE.match(normalize_recovery_code(code)))
 
 
 def hash_recovery_code(code: str) -> str:

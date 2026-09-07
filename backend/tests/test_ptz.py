@@ -309,6 +309,22 @@ async def test_release_by_a_stranger_does_not_free_the_camera() -> None:
     assert await lock.owner(camera_id) is None
 
 
+async def test_release_does_not_touch_a_lock_taken_over_meanwhile(fake_redis) -> None:
+    """Блокировка могла истечь и достаться другому, пока первый отпускал кнопку.
+
+    Раньше release шёл как GET, а следом DELETE, и в этот зазор он сносил уже
+    чужую блокировку. Здесь зазор воспроизводится прямо: ключ подменяется на
+    другого владельца до вызова release.
+    """
+    camera_id = uuid.uuid4()
+    await lock.acquire(camera_id, "v:first", 15)
+    await fake_redis.set(f"ptz:lock:{camera_id}", "v:second", ex=15)
+
+    await lock.release(camera_id, "v:first")
+
+    assert await lock.owner(camera_id) == "v:second"
+
+
 async def test_control_passes_on_when_the_hold_expires() -> None:
     camera_id = uuid.uuid4()
     await lock.acquire(camera_id, "v:first", 1)

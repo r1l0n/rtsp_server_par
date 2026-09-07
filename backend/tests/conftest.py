@@ -15,6 +15,16 @@ os.environ.setdefault("DOMAIN", "cam.test")
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 
+# Адреса MediaMTX — обязательно на 127.0.0.1, а не на имя `mediamtx` из
+# docker-сети. Вне контейнера такого имени нет, и Windows выясняет это не
+# мгновенно: перебор DNS, LLMNR и NetBIOS занимает больше десяти секунд на
+# каждый запрос. Тесты при этом проходят, просто прогон растягивается с
+# нескольких секунд до полутора минут. Порты заведомо никем не заняты —
+# соединение отвергается сразу, а это ровно то, что проверкам и нужно.
+os.environ.setdefault("MTX_API_URL", "http://127.0.0.1:59997")
+os.environ.setdefault("MTX_HLS_URL", "http://127.0.0.1:58888")
+os.environ.setdefault("MTX_WEBRTC_URL", "http://127.0.0.1:58889")
+
 import fakeredis.aioredis
 import pytest
 

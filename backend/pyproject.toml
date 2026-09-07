@@ -31,7 +31,10 @@ dependencies = [
 dev = [
     "pytest>=8.3,<9.0",
     "pytest-asyncio>=0.24,<2.0",
-    "fakeredis>=2.26,<3.0",
+    # [lua] — блокировка PTZ снимается Lua-скриптом (сравнение владельца и
+    # удаление одним шагом). Без этого extra fakeredis отвечает на EVAL
+    # «unknown command», и скрипты остались бы без единого теста.
+    "fakeredis[lua]>=2.26,<3.0",
     "pyyaml>=6.0,<7.0",
     "ruff>=0.8,<1.0",
     "mypy>=1.13,<2.0",
@@ -71,3 +74,13 @@ python_version = "3.12"
 strict = true
 plugins = []
 ignore_missing_imports = true
+
+# redis-py описывает команды одним классом на синхронный и асинхронный клиент,
+# поэтому статически они возвращают `Awaitable[T] | T`, и каждый `await` над
+# ними mypy считает ошибкой. Ошибка ложная — у `redis.asyncio` там всегда
+# awaitable, — но она сыпалась на два десятка мест и прятала настоящие.
+# follow_imports=skip делает типы redis непрозрачными; возвращаемые значения
+# мы и так приводим явно (bool(), int(), str()).
+[[tool.mypy.overrides]]
+module = "redis.*"
+follow_imports = "skip"

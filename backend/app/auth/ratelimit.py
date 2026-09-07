@@ -26,6 +26,12 @@ LOGIN_BY_IP = Limit(limit=20, window=300)
 LOGIN_BY_ACCOUNT = Limit(limit=10, window=900)
 #: Второй фактор перебирается быстрее — 6 цифр, поэтому окно жёстче.
 TOTP_BY_SESSION = Limit(limit=6, window=300)
+#: И отдельно по учётной записи. Лимит по сессии считается по её
+#: идентификатору, а сессий со статусом «пароль принят, жду код» можно завести
+#: сколько угодно, зная один валидный пароль, — по одной на каждые шесть
+#: попыток. Проверка кода восстановления стоит дорого (argon2 на каждый живой
+#: код), поэтому счёт нужен и по человеку, а не только по вкладке.
+TOTP_BY_ACCOUNT = Limit(limit=30, window=900)
 #: «Забыл пароль»: форма открыта всем, поэтому лимит и по адресу отправителя
 #: запроса, и по названному ящику — иначе ею завалят чужую почту.
 RESET_BY_IP = Limit(limit=5, window=900)
@@ -48,25 +54,38 @@ MAIL_TEST_BY_ACTOR = Limit(limit=10, window=600)
 
 
 async def hit(bucket: str, key: str, limit: Limit) -> Decision:
-    """Учитывает попытку и говорит, можно ли её выполнять."""
+    """Учитывает попытку и говорит, можно ли её выполнять.
+
+    Окно заводится тем же атомарным шагом, что и счётчик. Раньше EXPIRE шёл
+    отдельной командой после разбора ответа, и это давало два неприятных
+    исхода: два одновременных первых запроса сдвигали окно вперёд, а обрыв
+    связи с Redis ровно между командами оставлял ключ без TTL навсегда —
+    при `maxmemory-policy noeviction` такой счётчик уже никогда не истечёт,
+    и адрес или учётная запись оказывались заблокированы до ручной уборки.
+
+    `SET NX EX` создаёт ключ с готовым сроком, только если его ещё нет, и не
+    трогает уже идущее окно; INCR и TTL идут следом в той же транзакции.
+    """
     from ..redis_client import get_redis
 
     redis_key = f"rl:{bucket}:{key}"
-    redis = get_redis()
 
-    pipe = redis.pipeline()
+    pipe = get_redis().pipeline(transaction=True)
+    pipe.set(redis_key, 0, ex=limit.window, nx=True)
     pipe.incr(redis_key)
     pipe.ttl(redis_key)
-    count, ttl = await pipe.execute()
+    _, count, ttl = await pipe.execute()
 
-    if ttl is None or ttl < 0:
-        # Ключ только что создан (или потерял TTL) — задаём окно.
-        await redis.expire(redis_key, limit.window)
+    count = int(count)
+    # TTL -1 (ключ без срока) в норме недостижим, но если он всё же случился —
+    # чиним, иначе счётчик останется навсегда.
+    if ttl is None or int(ttl) < 0:
+        await get_redis().expire(redis_key, limit.window)
         ttl = limit.window
 
     if count > limit.limit:
         return Decision(allowed=False, remaining=0, retry_after=int(ttl))
-    return Decision(allowed=True, remaining=limit.limit - int(count), retry_after=0)
+    return Decision(allowed=True, remaining=limit.limit - count, retry_after=0)
 
 
 async def reset(bucket: str, key: str) -> None:

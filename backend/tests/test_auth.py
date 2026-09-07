@@ -21,6 +21,7 @@ from app.auth.sessions import SessionData
 from app.auth.totp import (
     generate_recovery_codes,
     hash_recovery_code,
+    looks_like_recovery_code,
     new_secret,
     verify_code,
     verify_recovery_code,
@@ -129,6 +130,29 @@ def test_recovery_code_verification_ignores_case_and_spaces() -> None:
     assert not verify_recovery_code(digest, generate_recovery_codes(1)[0])
 
 
+def test_every_generated_code_passes_the_shape_check() -> None:
+    """Иначе отсев по форме отрезал бы настоящие коды восстановления."""
+    for code in generate_recovery_codes(30):
+        assert looks_like_recovery_code(code)
+        assert looks_like_recovery_code(f"  {code.upper()}  ")
+
+
+def test_totp_digits_are_not_mistaken_for_a_recovery_code() -> None:
+    """Ради этого отсев и заведён: неверный код TOTP не должен запускать
+    до десяти проверок argon2 подряд."""
+    for code in (
+        "123456",       # обычный код TOTP
+        "000000",
+        "",
+        "abcde",        # нет второй половины
+        "a1b2c-3d4e",   # на символ короче
+        "a1b2c-3d4e5f",  # на символ длиннее
+        "a1b2c_3d4e5",  # не тот разделитель
+        "albol-1o0oo",  # 'l' и 'o' из алфавита исключены как похожие
+    ):
+        assert not looks_like_recovery_code(code), code
+
+
 # ─── Ограничение частоты ─────────────────────────────────────────────────────
 async def test_rate_limit_blocks_after_threshold() -> None:
     limit = ratelimit.Limit(limit=3, window=60)
@@ -151,6 +175,30 @@ async def test_rate_limit_reset_clears_counter() -> None:
     assert not (await ratelimit.hit("test", "c", limit)).allowed
     await ratelimit.reset("test", "c")
     assert (await ratelimit.hit("test", "c", limit)).allowed
+
+
+async def test_rate_limit_key_always_gets_a_deadline(fake_redis) -> None:
+    """Счётчик без TTL — это вечная блокировка.
+
+    Redis настроен с maxmemory-policy noeviction, поэтому ключ, потерявший
+    срок, не истечёт уже никогда: адрес или учётная запись оказались бы
+    заблокированы до ручной уборки. Срок должен появляться тем же шагом,
+    что и сам счётчик.
+    """
+    limit = ratelimit.Limit(limit=5, window=60)
+    await ratelimit.hit("test", "deadline", limit)
+    assert await fake_redis.ttl("rl:test:deadline") > 0
+
+
+async def test_rate_limit_window_does_not_slide_forward(fake_redis) -> None:
+    """Повторные попытки не должны продлевать уже идущее окно."""
+    limit = ratelimit.Limit(limit=5, window=60)
+    await ratelimit.hit("test", "window", limit)
+    await fake_redis.expire("rl:test:window", 10)
+
+    await ratelimit.hit("test", "window", limit)
+
+    assert await fake_redis.ttl("rl:test:window") <= 10
 
 
 # ─── Сессии ──────────────────────────────────────────────────────────────────

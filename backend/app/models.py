@@ -380,7 +380,20 @@ class ShareLink(Base):
 
 
 class ViewSession(Base):
-    """Один сеанс просмотра по публичной ссылке — для аудита и лимитов."""
+    """Журнал открытий публичной ссылки: кто, когда и с какого адреса.
+
+    Именно журнал, а не живой счётчик. Зритель не шлёт heartbeat, поэтому
+    момент, когда он закрыл вкладку, нам неизвестен — `ended_at` проставляет
+    worker через VIEW_SESSION_CLOSE_AFTER_MINUTES после начала, и это оценка,
+    а не факт.
+
+    Сколько человек смотрит прямо сейчас — знает Redis (множество
+    `link_viewers:<link_id>`, см. internal/authz). Именно оттуда берутся и
+    лимит одновременных зрителей, и метрика. Раньше метрика считалась по этой
+    таблице, а поле `last_seen_at` не обновлялось ни одной строчкой кода —
+    поэтому она показывала не зрителей, а число открытий страницы за
+    последние пять минут.
+    """
 
     __tablename__ = "view_sessions"
 
@@ -391,8 +404,7 @@ class ViewSession(Base):
     session_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     ip: Mapped[str] = mapped_column(String(45), default="")
     user_agent: Mapped[str] = mapped_column(Text, default="")
-    started_at: Mapped[dt.datetime] = mapped_column(TS, server_default=func.now())
-    last_seen_at: Mapped[dt.datetime] = mapped_column(TS, server_default=func.now())
+    started_at: Mapped[dt.datetime] = mapped_column(TS, server_default=func.now(), index=True)
     ended_at: Mapped[dt.datetime | None] = mapped_column(TS, default=None)
 
     __table_args__ = (Index("ix_view_sessions_active", "link_id", "ended_at"),)
@@ -419,6 +431,10 @@ class AuditLog(Base):
     ip: Mapped[str] = mapped_column(String(45), default="")
     user_agent: Mapped[str] = mapped_column(Text, default="")
     meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[dt.datetime] = mapped_column(
-        TS, server_default=func.now(), index=True
-    )
+    created_at: Mapped[dt.datetime] = mapped_column(TS, server_default=func.now())
+
+    #: Составной, а не по одному created_at: журнал листается курсором
+    #: «(created_at, id) < последней показанной», и обе колонки должны лежать
+    #: в индексе, иначе база возвращается к сортировке всей выборки. Отдельный
+    #: индекс по created_at не нужен — он повторяет начало этого.
+    __table_args__ = (Index("ix_audit_log_created_at_id", "created_at", "id"),)

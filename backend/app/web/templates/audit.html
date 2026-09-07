@@ -43,12 +43,16 @@
   {% if not entries %}<p class="muted">Записей нет.</p>{% endif %}
 </section>
 
+{# Листаем курсором, а не номером страницы: OFFSET на дальней странице
+   заставлял базу прочитать и выбросить всё, что до неё. #}
 <div class="pager">
-  {% if page > 0 %}
-    <a class="btn btn-secondary" href="/admin/audit?page={{ page - 1 }}&action={{ action }}">Назад</a>
+  {% if has_prev %}
+    <a class="btn btn-secondary"
+       href="/admin/audit?after={{ prev_cursor|urlencode }}&action={{ action|urlencode }}">Назад</a>
   {% endif %}
   {% if has_next %}
-    <a class="btn btn-secondary" href="/admin/audit?page={{ page + 1 }}&action={{ action }}">Вперёд</a>
+    <a class="btn btn-secondary"
+       href="/admin/audit?before={{ next_cursor|urlencode }}&action={{ action|urlencode }}">Вперёд</a>
   {% endif %}
 </div>
 {% endblock %}

@@ -28,7 +28,15 @@ from .redis_client import close_redis
 log = get_logger("worker")
 
 SNAPSHOT_REFRESH_MINUTES = 30
-VIEW_SESSION_STALE_MINUTES = 5
+#: Через сколько после открытия ссылки считаем сеанс просмотра завершённым.
+#: Именно оценка: зритель не шлёт heartbeat, и когда он закрыл вкладку, мы не
+#: знаем. Сколько человек смотрит прямо сейчас — знает Redis (internal/authz),
+#: и метрика берётся оттуда, а не отсюда.
+VIEW_SESSION_CLOSE_AFTER_MINUTES = 5
+#: Сколько журнал просмотров хранится. Строка появляется на каждое открытие и
+#: каждую перезагрузку публичной ссылки, и до сих пор эту таблицу не подрезал
+#: никто — она была самой быстрорастущей в схеме.
+VIEW_SESSION_RETENTION_DAYS = 90
 #: Через сколько дней отработавшее приглашение удаляется из таблицы.
 #: История остаётся в журнале аудита, а сама строка больше ни на что не влияет.
 INVITE_RETENTION_DAYS = 30
@@ -110,16 +118,22 @@ async def _snapshot_cycle() -> None:
 
 
 async def _cleanup_cycle() -> None:
-    """Закрывает забытые сеансы просмотра и убирает отработавшие приглашения."""
+    """Закрывает старые сеансы просмотра и убирает то, что отжило свой срок."""
     now = dt.datetime.now(dt.UTC)
-    stale_before = now - dt.timedelta(minutes=VIEW_SESSION_STALE_MINUTES)
+    stale_before = now - dt.timedelta(minutes=VIEW_SESSION_CLOSE_AFTER_MINUTES)
+    sessions_before = now - dt.timedelta(days=VIEW_SESSION_RETENTION_DAYS)
     invites_before = now - dt.timedelta(days=INVITE_RETENTION_DAYS)
 
     async with get_sessionmaker()() as session:
         await session.execute(
             update(ViewSession)
-            .where(ViewSession.ended_at.is_(None), ViewSession.last_seen_at < stale_before)
+            .where(ViewSession.ended_at.is_(None), ViewSession.started_at < stale_before)
             .values(ended_at=now)
+        )
+        # Журнал просмотров старше срока хранения. Кто и когда открывал ссылку,
+        # остаётся в audit_log — там это и положено искать.
+        await session.execute(
+            delete(ViewSession).where(ViewSession.started_at < sessions_before)
         )
         # Принятые, отозванные и давно просроченные приглашения. Действующие
         # не трогаем никогда — по ним человек ещё может прийти.

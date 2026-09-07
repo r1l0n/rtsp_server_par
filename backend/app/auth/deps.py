@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from collections.abc import Callable, Coroutine
+from typing import Annotated, Any
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,7 +83,7 @@ async def require_user(request: Request, session: SessionDep, user: OptionalUser
 CurrentUser = Annotated[User, Depends(require_user)]
 
 
-def require_role(*roles: Role):
+def require_role(*roles: Role) -> Callable[[User], Coroutine[Any, Any, User]]:
     """Зависимость, пускающая только перечисленные роли."""
 
     async def dependency(user: CurrentUser) -> User:

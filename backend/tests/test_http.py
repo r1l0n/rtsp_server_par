@@ -104,6 +104,55 @@ def test_panel_forbids_framing(client: TestClient) -> None:
     assert client.get("/login").headers["X-Frame-Options"] == "DENY"
 
 
+def test_view_cookie_is_cross_site_so_embedding_works(monkeypatch) -> None:
+    """Панель выдаёт `<iframe src=".../embed/...">` для чужого сайта.
+
+    С SameSite=Lax браузер не отправил бы cookie доступа из стороннего
+    iframe, forward_auth ответил бы 403 на каждый сегмент, и встраивание
+    не работало бы ни при каких условиях.
+    """
+    from starlette.responses import Response
+
+    from app.web import templating
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "session_cookie_secure", True, raising=False)
+    response = Response()
+    templating.set_view_cookie(response, "viewer-1", 3600)
+    cookie = response.headers["set-cookie"]
+    assert "samesite=none" in cookie.lower()
+    assert "Secure" in cookie
+    assert "HttpOnly" in cookie
+
+
+def test_view_cookie_falls_back_to_lax_without_tls(monkeypatch) -> None:
+    """SameSite=None без Secure браузер отвергает целиком — в разработке нельзя."""
+    from starlette.responses import Response
+
+    from app.web import templating
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "session_cookie_secure", False, raising=False)
+    response = Response()
+    templating.set_view_cookie(response, "viewer-1", 3600)
+    cookie = response.headers["set-cookie"]
+    assert "samesite=lax" in cookie.lower()
+    assert "Secure" not in cookie
+
+
+async def test_panel_session_cookie_stays_lax() -> None:
+    """Послабление касается только cookie просмотра, не сессии панели."""
+    from starlette.responses import Response
+
+    from app.auth import sessions
+    from app.web.templating import set_session_cookie
+
+    session = await sessions.create("00000000-0000-0000-0000-000000000001")
+    response = Response()
+    set_session_cookie(response, session)
+    assert "samesite=lax" in response.headers["set-cookie"].lower()
+
+
 def test_panel_pages_are_not_cached(client: TestClient) -> None:
     assert client.get("/login").headers["Cache-Control"] == "no-store"
 

@@ -90,6 +90,12 @@ def _from_migrations() -> dict[str, dict[str, str]]:
         if described is not None:
             tables.setdefault(match.group(1), {})[described[0]] = described[1]
 
+    # И снятые колонки — иначе тест видел бы их вечно: DROP COLUMN проходил
+    # мимо разбора, колонка оставалась в схеме «по миграциям», и удаление поля
+    # из модели падало бы как расхождение, хотя миграция написана верно.
+    for match in re.finditer(r"ALTER TABLE (\w+) DROP COLUMN (\w+);", sql):
+        tables.get(match.group(1), {}).pop(match.group(2).strip('"'), None)
+
     tables.pop("alembic_version", None)  # служебная таблица самого alembic
     return tables
 

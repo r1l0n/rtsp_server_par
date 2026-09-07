@@ -24,6 +24,7 @@ from ..internal.authz import (
     ip_allowed,
     link_is_valid,
     new_viewer_id,
+    viewer_counted,
 )
 from ..logging_setup import get_logger
 from ..middleware import client_ip
@@ -32,7 +33,7 @@ from ..ptz import service as ptz
 from ..ptz.lock import viewer_holder
 from ..redis_client import get_redis
 from .panel_views import ptz_response
-from .templating import render
+from .templating import render, set_view_cookie
 
 log = get_logger("public")
 router = APIRouter(tags=["public"])
@@ -48,30 +49,58 @@ class Denied(Exception):
         self.status_code = status_code
 
 
-async def _resolve_link(
-    db: AsyncSession, slug: str, token: str, ip: str
-) -> tuple[ShareLink, Camera]:
+async def _find_link(db: AsyncSession, slug: str) -> tuple[ShareLink | None, Camera | None]:
+    """Ссылка по slug и её камера — без единой проверки прав."""
     link = await db.scalar(select(ShareLink).where(ShareLink.slug == slug))
     if link is None:
-        raise Denied(status_code=404)
+        return None, None
+    return link, await db.get(Camera, link.camera_id)
 
-    if not token or not tokens_equal(hash_token(token), link.token_hash):
-        raise Denied()
 
+def _assert_link_live(link: ShareLink, camera: Camera | None, ip: str) -> Camera:
+    """Проверки, не зависящие от токена: срок, отзыв, адрес, камера.
+
+    Вынесены отдельно намеренно. Раньше они жили внутри проверки токена, и
+    перезагрузка страницы без `?t=` шла мимо них целиком: ограничение по
+    адресу и пароль ссылки обходились простым F5 с другой сети.
+    """
     if link.revoked_at is not None:
         raise Denied()
     if link.expires_at is not None and link.expires_at <= dt.datetime.now(dt.UTC):
         raise Denied()
     if not ip_allowed(ip, list(link.allowed_cidrs or [])):
         raise Denied("Доступ с этого IP-адреса запрещён владельцем ссылки.")
-
-    camera = await db.get(Camera, link.camera_id)
     if camera is None or not camera.is_enabled:
         raise Denied("Камера недоступна.")
+    return camera
 
-    if link.max_concurrent and await count_viewers(link.id) >= link.max_concurrent:
+
+async def _assert_capacity(link: ShareLink, viewer_id: str) -> None:
+    """Лимит одновременных зрителей.
+
+    Зритель, уже учтённый в этой ссылке, лимит не занимает повторно — иначе
+    ссылка с лимитом 1 отказывала бы собственному зрителю при перезагрузке.
+    """
+    if not link.max_concurrent:
+        return
+    if await viewer_counted(link.id, viewer_id):
+        return
+    if await count_viewers(link.id) >= link.max_concurrent:
         raise Denied("Достигнут лимит одновременных зрителей этой ссылки.", status_code=429)
 
+
+async def _resolve_link(
+    db: AsyncSession, slug: str, token: str, ip: str, viewer_id: str = ""
+) -> tuple[ShareLink, Camera]:
+    link, camera = await _find_link(db, slug)
+    if link is None:
+        raise Denied(status_code=404)
+
+    if not token or not tokens_equal(hash_token(token), link.token_hash):
+        raise Denied()
+
+    camera = _assert_link_live(link, camera, ip)
+    await _assert_capacity(link, viewer_id)
     return link, camera
 
 
@@ -121,27 +150,22 @@ async def _open_stream(
             f"/v/{link.slug}/ptz" if camera.ptz_enabled and link.ptz_allowed else ""
         ),
     )
-    response.set_cookie(
-        VIEW_COOKIE,
-        viewer_id,
-        max_age=ttl,
-        httponly=True,
-        secure=settings.session_cookie_secure,
-        samesite="lax",
-        path="/",
-    )
+    set_view_cookie(response, viewer_id, ttl)
     return response
 
 
-async def _already_granted(request: Request, camera: Camera) -> bool:
-    """Страницу можно перезагрузить без токена в адресной строке."""
-    from ..redis_client import get_redis
+async def _already_granted(viewer_id: str, camera: Camera, link: ShareLink) -> bool:
+    """Страницу можно перезагрузить без токена в адресной строке.
 
-    viewer_id = request.cookies.get(VIEW_COOKIE)
+    Сверяем именно с идентификатором ЭТОЙ ссылки, а не с фактом наличия ключа:
+    иначе грант, выданный соседней ссылкой на ту же камеру (или просмотром
+    оператора из панели), открывал бы страницу под чужим slug — вместе с его
+    паролем и ограничением по адресу.
+    """
     if not viewer_id:
         return False
     granted = await get_redis().hget(f"viewer:{viewer_id}", camera.mtx_path)
-    return bool(granted)
+    return bool(granted == str(link.id))
 
 
 # ─── Страница просмотра ──────────────────────────────────────────────────────
@@ -166,16 +190,25 @@ async def _view(
             message="Слишком много запросов. Попробуйте через минуту.", embed=embed,
         )
 
-    link = await db.scalar(select(ShareLink).where(ShareLink.slug == slug))
-    camera = await db.get(Camera, link.camera_id) if link is not None else None
+    viewer_id = request.cookies.get(VIEW_COOKIE) or ""
+    link, camera = await _find_link(db, slug)
 
-    # Перезагрузка страницы без ?t= — доступ уже выдан этому браузеру.
-    if link is not None and camera is not None and not token:
-        if await _already_granted(request, camera):
-            return await _open_stream(request, db, link, camera, embed=embed)
+    # Перезагрузка страницы без ?t= — доступ уже выдан этому браузеру именно
+    # этой ссылкой. Токен при этом не требуется, но всё остальное — срок,
+    # отзыв, разрешённые адреса, лимит зрителей — проверяется как обычно.
+    # Пароль повторно не спрашиваем: его уже вводили, когда выдавали грант.
+    reused = (
+        link is not None
+        and camera is not None
+        and await _already_granted(viewer_id, camera, link)
+    )
 
     try:
-        link, camera = await _resolve_link(db, slug, token, ip)
+        if reused and link is not None:
+            camera = _assert_link_live(link, camera, ip)
+            await _assert_capacity(link, viewer_id)
+        else:
+            link, camera = await _resolve_link(db, slug, token, ip, viewer_id)
     except Denied as denied:
         if link is not None:
             await audit.record(
@@ -188,7 +221,7 @@ async def _view(
             message=denied.message, embed=embed,
         )
 
-    if link.password_hash:
+    if link.password_hash and not reused:
         return render(
             request, "link_password.html", slug=slug, token=token, embed=embed,
             camera_name=link.label or "Просмотр камеры",
@@ -206,11 +239,15 @@ async def view_ptz(request: Request, db: DbSession, slug: str) -> JSONResponse:
     медиа-запросы: cookie зрителя → путь MediaMTX → идентификатор ссылки.
 
     CSRF-токена на публичной странице взяться неоткуда — сессии у зрителя
-    нет. Межсайтовый вызов закрыт с трёх сторон: cookie доступа помечена
-    SameSite=Lax и в стороннем POST не отправляется; тело идёт как JSON,
-    что заставляет браузер сначала спросить preflight, а CORS мы не
-    разрешаем вовсе; плюс требуется заголовок X-Requested-With, который
-    чужая страница без preflight поставить не может.
+    нет. Межсайтовый вызов закрыт двумя условиями сразу: тело идёт как JSON,
+    что заставляет браузер сначала спросить preflight, а CORS мы не разрешаем
+    вовсе; плюс требуется заголовок X-Requested-With, который чужая страница
+    без preflight поставить не может. Любого из них достаточно поодиночке:
+    preflight на чужом домене не проходит, и запрос до нас не доходит.
+
+    На SameSite здесь не рассчитываем. Cookie доступа помечена SameSite=None,
+    иначе не работает встраивание в чужой сайт, ради которого заведён
+    /embed/ (см. templating.set_view_cookie).
     """
     if request.headers.get("x-requested-with") != "fetch":
         return JSONResponse({"error": GENERIC_DENIED}, status_code=403)

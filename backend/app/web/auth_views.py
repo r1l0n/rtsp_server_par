@@ -20,7 +20,7 @@ from ..auth.passwords import (
     validate_password_policy,
     verify_password,
 )
-from ..auth.totp import verify_code, verify_recovery_code
+from ..auth.totp import looks_like_recovery_code, verify_code, verify_recovery_code
 from ..config import get_settings
 from ..crypto import get_cipher
 from ..logging_setup import get_logger
@@ -213,7 +213,9 @@ async def totp_verify(
     next_url = safe_next(next)
 
     limited = await ratelimit.hit("totp", session.sid, ratelimit.TOTP_BY_SESSION)
-    if not limited.allowed:
+    # Лимит по сессии обходится новой сессией, поэтому считаем и по человеку.
+    by_account = await ratelimit.hit("totp_acct", session.user_id, ratelimit.TOTP_BY_ACCOUNT)
+    if not limited.allowed or not by_account.allowed:
         await sessions.delete(session.sid)
         response = redirect("/login")
         clear_session_cookie(response)
@@ -247,6 +249,7 @@ async def totp_verify(
     )
     await db.commit()
     await ratelimit.reset("login_acct", user.email)
+    await ratelimit.reset("totp_acct", str(user.id))
 
     # Смена уровня привилегий — новый идентификатор сессии (session fixation).
     fresh = await sessions.rotate(session, pending_2fa=False)
@@ -256,7 +259,16 @@ async def totp_verify(
 
 
 async def _try_recovery_code(db: DbSession, user: User, code: str) -> tuple[bool, bool]:
-    """Проверяет код восстановления и гасит его при совпадении."""
+    """Проверяет код восстановления и гасит его при совпадении.
+
+    Сначала — проверка формы. Коды лежат хешами, найти нужный по значению
+    нельзя, поэтому кандидат сверяется argon2 с каждым живым кодом: до десяти
+    проверок по ~60 мс. Неверный код TOTP на код восстановления не похож,
+    и тратить на него полсекунды процессорного времени незачем.
+    """
+    if not looks_like_recovery_code(code):
+        return False, False
+
     codes = await db.scalars(
         select(RecoveryCode).where(
             RecoveryCode.user_id == user.id, RecoveryCode.used_at.is_(None)

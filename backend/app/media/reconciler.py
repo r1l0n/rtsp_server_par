@@ -128,13 +128,26 @@ async def drop_path(mtx_path: str, mtx: MediaMTXClient) -> None:
 
 
 # ─── Обновление статусов (watchdog) ──────────────────────────────────────────
-async def refresh_statuses(session: AsyncSession, mtx: MediaMTXClient) -> None:
-    """Переносит состояние путей MediaMTX в БД, чтобы оно было видно в панели."""
+async def refresh_statuses(
+    session: AsyncSession, mtx: MediaMTXClient, node_id: str = "default"
+) -> None:
+    """Переносит состояние путей MediaMTX в БД, чтобы оно было видно в панели.
+
+    Отбор камер тот же, что в `desired_state`, — по узлу. Без этого условия
+    (а его тут не было) второй узел считал бы чужие камеры сломанными: их
+    путей нет в его MediaMTX, значит status=offline, растущий failure_streak
+    и попытки пересоздать чужой путь у себя. Симптом — «камеры мигают между
+    online и offline» — на источник не указывает совсем.
+    """
     settings = get_settings()
     now = dt.datetime.now(dt.UTC)
 
     active = {item["name"]: item for item in await mtx.list_active_paths() if item.get("name")}
-    cameras = list(await session.scalars(select(Camera).where(Camera.is_enabled.is_(True))))
+    cameras = list(
+        await session.scalars(
+            select(Camera).where(Camera.is_enabled.is_(True), Camera.node_id == node_id)
+        )
+    )
 
     for camera in cameras:
         item = active.get(camera.mtx_path)

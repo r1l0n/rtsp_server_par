@@ -23,6 +23,7 @@ import contextlib
 import socket
 import time
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -402,7 +403,7 @@ async def _check_stream(camera: Camera, mtx: MediaMTXClient) -> list[tuple[str, 
     playlist_url = f"{settings.mtx_hls_url.rstrip('/')}/{camera.mtx_path}/index.m3u8"
     puller = asyncio.create_task(_probe_endpoint(playlist_url))
 
-    item: dict[str, object] | None = None
+    item: dict[str, Any] | None = None
     api_error = ""
     deadline = time.monotonic() + STREAM_WAIT
 
@@ -435,8 +436,8 @@ async def _check_stream(camera: Camera, mtx: MediaMTXClient) -> list[tuple[str, 
         return [("stream", "MediaMTX тянет поток", FAIL,
                  "путь исчез из медиа-сервера — он его не принял")]
 
-    tracks = [str(track) for track in (item.get("tracks") or [])]  # type: ignore[union-attr]
-    received = int(item.get("bytesReceived") or 0)  # type: ignore[arg-type]
+    tracks = [str(track) for track in (item.get("tracks") or [])]
+    received = int(item.get("bytesReceived") or 0)
     summary = f"дорожки: {', '.join(tracks) or 'нет'}; принято {received / 1048576:.2f} МБ"
 
     steps: list[tuple[str, str, str, str]] = []

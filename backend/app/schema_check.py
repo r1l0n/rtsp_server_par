@@ -47,7 +47,8 @@ async def db_revision(session: AsyncSession) -> str | None:
     """Ревизия, на которой стоит база. None — миграции не накатывались ни разу."""
     if await session.scalar(text("SELECT to_regclass('public.alembic_version')")) is None:
         return None
-    return await session.scalar(text("SELECT version_num FROM alembic_version"))
+    revision: str | None = await session.scalar(text("SELECT version_num FROM alembic_version"))
+    return revision
 
 
 async def status(session: AsyncSession) -> tuple[bool, str]:

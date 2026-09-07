@@ -18,13 +18,24 @@
 	# не влияет.
 	default_sni {$DOMAIN}
 
-	# Реальный IP клиента берём только из доверенных прокси (их тут нет —
-	# Caddy сам является границей). Если перед Caddy встанет CDN/балансировщик,
-	# добавить его подсеть сюда.
-	servers {
-		trusted_proxies static private_ranges
-		client_ip_headers X-Forwarded-For
-	}
+	# Реальный IP клиента Caddy берёт из адреса TCP-соединения: он тут граница,
+	# и доверять чужим заголовкам ему не с чего.
+	#
+	# Раньше здесь стояло `trusted_proxies static private_ranges` вместе с
+	# `client_ip_headers X-Forwarded-For`, и это было ошибкой. В режиме «доступ
+	# по IP» (и вообще при установке в локальной сети) клиенты приходят с
+	# 192.168.x.x или 10.x.x.x — то есть сами попадают в private_ranges, — и
+	# любой из них мог назвать в X-Forwarded-For какой угодно адрес. Этим
+	# обходился список ALLOWED_CIDRS у публичных ссылок, обнулялись лимиты
+	# частоты по IP и подделывалась запись в журнале аудита.
+	#
+	# Если перед Caddy когда-нибудь встанет CDN или балансировщик — раскомментировать
+	# и указать ЕГО подсеть, а не диапазон целиком:
+	#
+	#	servers {
+	#		trusted_proxies static 10.9.0.0/24
+	#		client_ip_headers X-Forwarded-For
+	#	}
 }
 
 (hardening) {
@@ -73,6 +84,12 @@
 			forward_auth api:8000 {
 				uri /internal/authz
 				copy_headers X-Mtx-Path X-Link-Id
+				# Адрес зрителя нужен самому authz: ссылка может быть ограничена
+				# списком подсетей, и проверять его только при открытии страницы
+				# недостаточно — иначе ограничение обходится перезагрузкой.
+				# header_up ЗАМЕНЯЕТ заголовок, поэтому свой X-Real-IP клиент
+				# подсунуть не может.
+				header_up X-Real-IP {client_ip}
 			}
 			uri strip_prefix /whep
 			reverse_proxy mediamtx:8889 {
@@ -93,6 +110,7 @@
 			forward_auth api:8000 {
 				uri /internal/authz
 				copy_headers X-Mtx-Path X-Link-Id
+				header_up X-Real-IP {client_ip}
 			}
 			uri strip_prefix /whep
 			reverse_proxy mediamtx:8889
@@ -109,6 +127,7 @@
 			forward_auth api:8000 {
 				uri /internal/authz
 				copy_headers X-Mtx-Path X-Link-Id
+				header_up X-Real-IP {client_ip}
 			}
 			uri strip_prefix /hls
 			reverse_proxy mediamtx:8888

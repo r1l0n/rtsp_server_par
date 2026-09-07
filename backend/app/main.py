@@ -134,7 +134,12 @@ async def metrics() -> Response:
     registry = CollectorRegistry()
     cameras = Gauge("rtspgw_cameras", "Камеры по статусам", ["status"], registry=registry)
     links = Gauge("rtspgw_active_links", "Действующие публичные ссылки", registry=registry)
-    viewers = Gauge("rtspgw_active_viewers", "Открытые сеансы просмотра", registry=registry)
+    viewers = Gauge("rtspgw_active_viewers", "Зрители на публичных ссылках", registry=registry)
+
+    # Зрителей считаем по Redis, а не по view_sessions: та таблица — журнал
+    # открытий, и «активных» сеансов в ней ровно столько, сколько страниц
+    # открыли за последние пять минут.
+    viewers.set(await authz.count_all_viewers())
 
     async with get_sessionmaker()() as session:
         rows = await session.execute(
@@ -150,10 +155,6 @@ async def metrics() -> Response:
                     "WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())"
                 )
             )
-            or 0
-        )
-        viewers.set(
-            await session.scalar(text("SELECT count(*) FROM view_sessions WHERE ended_at IS NULL"))
             or 0
         )
 
