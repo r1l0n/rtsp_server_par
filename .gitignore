@@ -11,3 +11,5 @@ venv/
 *.egg-info/
 ops/backups/
 caddy_data/
+# Точка возврата, которую ops/update.sh пишет перед обновлением.
+.update-previous-revision
