@@ -725,7 +725,16 @@ code {
   background: var(--neutral-900);
   overflow: hidden;
 }
-.shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* position нужен, чтобы кадр перекрывал подложку «кадра ещё нет»: она
+   позиционирована, а непозиционированная картинка рисовалась бы под ней
+   независимо от порядка в разметке — надпись проступала поверх снимка. */
+.shot img {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
 .shot-empty {
   position: absolute;
   inset: 0;
