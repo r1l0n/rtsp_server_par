@@ -121,6 +121,41 @@ def test_rail_opens_for_the_keyboard_too() -> None:
     assert ".sidebar:focus-within .rail-label" in CSS
 
 
+def test_flyout_band_is_reserved_beside_the_rail() -> None:
+    """Ярлыки всплывают в отведённую дорожку, а не поверх содержимого.
+
+    Стоит вернуть в каркас голый --rail, и подписи разделов лягут на плитки
+    камер. Видно это только под курсором и только на широком экране, поэтому
+    поймать глазами почти нельзя.
+    """
+    assert "var(--rail-flyout)" in _block(".shell {")
+    # Потолок ширины ярлыка тоже считается от дорожки: иначе длинное название
+    # раздела вылезет за неё и накроет содержимое.
+    assert "var(--rail-flyout)" in _block(".rail-label {")
+
+
+def _translate_x(rule: str) -> int:
+    """Горизонтальный сдвиг из `transform: translate(...)` в пикселях."""
+    value = re.search(r"transform: translate\(([^,]+),", rule).group(1).strip()
+    token = re.fullmatch(r"var\((--space-\d)\)", value)
+    if token:
+        value = _tokens(":root {")[token.group(1)]
+    return int(value.removesuffix("px"))
+
+
+def test_the_label_moves_toward_its_icon() -> None:
+    """Ярлык подъезжает к своей иконке, а не отъезжает от неё.
+
+    Движение к точке, на которую смотрят, читается как ответ на наведение;
+    движение прочь — будто ярлык убегает от курсора. Заодно это причина, по
+    которой дорожка считается по точке появления, а не по конечной: на первом
+    кадре ярлык дальше от полосы, чем в покое.
+    """
+    hidden = _translate_x(_block(".rail-label {"))
+    shown = _translate_x(_block(".sidebar:hover .rail-label,"))
+    assert hidden > shown
+
+
 def test_narrow_screens_name_the_sections_without_hover() -> None:
     """На телефоне наведения нет — там подписи стоят на месте, а не всплывают.
 

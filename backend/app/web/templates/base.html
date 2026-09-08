@@ -21,15 +21,18 @@
 
   {% if user %}
   {% set path = request.url.path %}
-  {# Меню — узкая полоса с одними иконками; названия всплывают ярлыками справа,
-     когда на полосу наводят курсор. Подпись живёт внутри самой ссылки, а не в
-     отдельном всплывающем окне: так ярлык кликается наравне с иконкой, читается
-     скринридером всегда и не требует ни строчки скрипта — CSP всё равно
-     запрещает и инлайновые стили, и инлайновые обработчики. #}
+  {# Меню — узкая полоса с одними иконками; названия разделов всплывают ярлыками
+     справа, когда на полосу наводят курсор. Подпись живёт внутри самой ссылки, а
+     не в отдельном всплывающем окне: так ярлык кликается наравне с иконкой,
+     читается скринридером всегда и не требует ни строчки скрипта — CSP всё равно
+     запрещает и инлайновые стили, и инлайновые обработчики.
+
+     Ярлыки только у разделов. Логотип, профиль, настройки и выход подписаны
+     через title/aria-label: их четверо, они всем знакомы по форме, а всплывать
+     ради них нечему — зато адрес почты в ярлыке растягивал бы полосу вдвое. #}
   <aside class="sidebar" aria-label="Разделы">
-    <a class="rail-item rail-brand" href="/">
+    <a class="rail-item rail-brand" href="/" aria-label="{{ app_name }}" title="{{ app_name }}">
       <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-camera"></use></svg></span>
-      <span class="rail-label">{{ app_name }}</span>
     </a>
 
     <nav class="rail-nav">
@@ -54,25 +57,25 @@
 
     <div class="rail-foot">
       {% set who = (user.full_name or user.email).split() %}
+      {% set whoami = user.full_name or user.email %}
       <a class="rail-item rail-user" href="/profile"
+         aria-label="Профиль — {{ whoami }}" title="Профиль — {{ whoami }}"
          {% if path.startswith('/profile') %}aria-current="page"{% endif %}>
         <span class="rail-glyph">
           <span class="avatar">{{ (who[0][0] ~ (who[1][0] if who|length > 1 else ''))|upper }}</span>
         </span>
-        <span class="rail-label">{{ user.full_name or user.email }}</span>
       </a>
       {# Настройки — окном поверх страницы: за ними приходят на минуту
          и возвращаются к тому, что делали. #}
       <button type="button" class="rail-item" data-dialog-open="settings"
-              data-dialog-src="/settings/dialog?next={{ path|urlencode }}">
+              data-dialog-src="/settings/dialog?next={{ path|urlencode }}"
+              aria-label="Настройки" title="Настройки">
         <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-gear"></use></svg></span>
-        <span class="rail-label">Настройки</span>
       </button>
       <form method="post" action="/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="rail-item rail-logout">
+        <button type="submit" class="rail-item rail-logout" aria-label="Выйти" title="Выйти">
           <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-logout"></use></svg></span>
-          <span class="rail-label">Выйти</span>
         </button>
       </form>
     </div>

@@ -192,6 +192,49 @@ def test_sidebar_shows_every_section_to_admins() -> None:
         assert link in html, link
 
 
+def test_icon_only_rail_items_are_named() -> None:
+    """Пункты полосы без всплывающего ярлыка обязаны иметь aria-label.
+
+    Логотип, профиль, настройки и выход — одни иконки, а <svg> внутри помечен
+    aria-hidden. Без aria-label скринридер читает их как «ссылка» и «кнопка»,
+    и выйти из панели вслепую нельзя. Проверка глазами тут бесполезна: на
+    экране всё на месте.
+    """
+    from app.web.templating import THEMES
+
+    admin = User(
+        id=uuid.uuid4(), email="admin@example.com",
+        full_name="Пётр Иванов", role=Role.admin,
+    )
+    html = templates.env.get_template("settings_theme.html").render(
+        request=types.SimpleNamespace(url=types.SimpleNamespace(path="/")),
+        user=admin, themes=THEMES, theme="dark", csrf_token="t",
+    )
+    for name in ('aria-label="Настройки"', 'aria-label="Выйти"', 'aria-label="Профиль'):
+        assert name in html, name
+
+
+def test_only_sections_get_a_hover_label() -> None:
+    """Всплывают названия разделов — и только они.
+
+    Ярлык раздвигает дорожку, зарезервированную под него в каркасе страницы
+    (--rail-flyout). Адрес почты или полное имя пользователя туда не влезают:
+    ярлык вылез бы поверх содержимого, ради чего дорожку и заводили.
+    """
+    from app.web.templating import THEMES
+
+    admin = User(
+        id=uuid.uuid4(), email="very.long.address@example.com",
+        full_name="Пётр Иванов", role=Role.admin,
+    )
+    html = templates.env.get_template("settings_theme.html").render(
+        request=types.SimpleNamespace(url=types.SimpleNamespace(path="/")),
+        user=admin, themes=THEMES, theme="dark", csrf_token="t",
+    )
+    labels = re.findall(r'<span class="rail-label">([^<]*)</span>', html)
+    assert labels == ["Камеры", "Пользователи", "Журнал"], labels
+
+
 def test_settings_open_as_a_dialog_not_a_menu_item() -> None:
     """Настройки вызываются шестерёнкой рядом с профилем, а не пунктом меню."""
     from app.web.templating import THEMES
