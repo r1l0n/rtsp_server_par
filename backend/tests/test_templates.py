@@ -192,6 +192,22 @@ def test_sidebar_shows_every_section_to_admins() -> None:
         assert link in html, link
 
 
+def test_every_referenced_icon_exists_in_the_sprite() -> None:
+    """Ссылка на несуществующий символ рисует пустоту, и молча.
+
+    <use href="#i-опечатка"> не даёт ни ошибки в консоли, ни сдвига вёрстки —
+    на месте иконки просто ничего нет. Замечают такое недели спустя и обычно
+    не на той странице, где сломали.
+    """
+    sprite = (TEMPLATE_DIR / "_icons.html").read_text(encoding="utf-8")
+    defined = set(re.findall(r'<symbol id="([^"]+)"', sprite))
+    used: set[str] = set()
+    for path in TEMPLATE_DIR.glob("*.html"):
+        used |= set(re.findall(r'<use href="#([^"]+)"', path.read_text(encoding="utf-8")))
+    assert used, "ни одной иконки не найдено — сломался сам разбор"
+    assert not used - defined, "нет таких символов в спрайте"
+
+
 def test_icon_only_rail_items_are_named() -> None:
     """Пункты полосы без всплывающего ярлыка обязаны иметь aria-label.
 

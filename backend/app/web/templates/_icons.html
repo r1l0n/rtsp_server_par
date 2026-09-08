@@ -6,6 +6,19 @@
    скрипты — nonce на атрибут style не распространяется. #}
 <svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false">
   <defs>
+    {# Знак PARITET: «П» на почти чёрной плашке. Единственный символ здесь,
+       который рисуется заливкой, а не обводкой, — поэтому и подключается
+       классом .logo, а не .i: у .i стоит `fill: none`, и CSS перебивает
+       атрибуты внутри symbol, так что под ним знак стал бы пустым.
+
+       Плашка тёмная в обеих темах: это часть знака, а не элемент интерфейса.
+       На тёмном меню она почти сливается с фоном и остаётся одна «П» — так и
+       задумано. «П» берёт currentColor, чтобы фирменный красный приезжал из
+       палитры и совпадал с остальным красным на экране. #}
+    <symbol id="i-logo" viewBox="0 0 24 24">
+      <rect width="24" height="24" rx="5.2" fill="#0d0d0d"/>
+      <path d="M4.7 17.25V6.7h14.6v10.55h-4.2V9.6H8.9v7.65z" fill="currentColor"/>
+    </symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></symbol>

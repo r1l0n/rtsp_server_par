@@ -121,6 +121,19 @@ def test_rail_opens_for_the_keyboard_too() -> None:
     assert ".sidebar:focus-within .rail-label" in CSS
 
 
+def test_the_logo_is_not_painted_like_the_stroked_icons() -> None:
+    """Фирменный знак рисуется заливкой, а иконки — обводкой.
+
+    В `.i` стоит `fill: none`, и CSS перебивает атрибуты fill внутри <symbol>.
+    Достаточно кому-нибудь свести знак к общему классу иконок — и в углу
+    каждой страницы останется пустое место. Ошибка тихая: разметка на месте,
+    размеры на месте, не видно ничего.
+    """
+    logo = _block(".logo {")
+    assert "fill" not in logo
+    assert "stroke" not in logo
+
+
 def test_flyout_band_is_reserved_beside_the_rail() -> None:
     """Ярлыки всплывают в отведённую дорожку, а не поверх содержимого.
 
