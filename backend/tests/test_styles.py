@@ -143,17 +143,20 @@ def _translate_x(rule: str) -> int:
     return int(value.removesuffix("px"))
 
 
-def test_the_label_moves_toward_its_icon() -> None:
+def test_the_label_moves_toward_the_icon_being_pointed_at() -> None:
     """Ярлык подъезжает к своей иконке, а не отъезжает от неё.
 
     Движение к точке, на которую смотрят, читается как ответ на наведение;
     движение прочь — будто ярлык убегает от курсора. Заодно это причина, по
-    которой дорожка считается по точке появления, а не по конечной: на первом
-    кадре ярлык дальше от полосы, чем в покое.
+    которой дорожка считается по положению в покое, а не по ближнему: поодаль
+    держатся все ярлыки, кроме одного.
+
+    Привязка именно к пункту, а не к полосе целиком: раскрытие всего столбика
+    показывает, что полоса ожила, но не отвечает на вопрос «где я сейчас».
     """
-    hidden = _translate_x(_block(".rail-label {"))
-    shown = _translate_x(_block(".sidebar:hover .rail-label,"))
-    assert hidden > shown
+    rest = _translate_x(_block(".rail-label {"))
+    near = _translate_x(_block(".rail-item:hover .rail-label,"))
+    assert near < rest
 
 
 def test_narrow_screens_name_the_sections_without_hover() -> None:
