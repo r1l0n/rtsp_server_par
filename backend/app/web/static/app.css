@@ -1194,6 +1194,43 @@ textarea.copyfield { width: 100%; }
 .tab-panel { display: flex; flex-direction: column; gap: var(--space-2); }
 .dialog .page-head { margin-bottom: 0; }
 
+/* Окно настроек держит один размер на всех вкладках: рамка не прыгает при
+   переключении. Прокручивается только содержимое вкладки, шапка и кнопки
+   стоят на месте. */
+.dialog-settings {
+  height: min(520px, calc(100vh - 2 * var(--space-4)));
+  overflow: hidden;
+}
+/* В узком окне поля всё равно встают по три в ряд — иначе почта вытягивается
+   вдвое длиннее темы и без прокрутки не обходится. */
+.dialog-settings .field-row {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0 var(--space-3);
+}
+.dialog-settings .dialog-body,
+.dialog-settings .tab-panel { flex: 1; min-height: 0; }
+.dialog-settings .tab-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Полоса прокрутки не должна наезжать на поля. */
+  padding-right: var(--space-3);
+  margin-right: calc(-1 * var(--space-2));
+}
+/* Короткой вкладке высота досталась от длинной — ставим её содержимое по
+   середине, чтобы пустота не собиралась внизу одним пятном. */
+.dialog-settings .tab-scroll-center { justify-content: center; }
+.dialog-settings .theme-choices { margin-bottom: 0; }
+.dialog-settings .theme-swatch { height: 96px; }
+.dialog-settings .dialog-actions {
+  margin-top: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--divider);
+}
+
 /* ── Страница камеры ───────────────────────────────────────────────────── */
 .detail-grid {
   display: grid;
