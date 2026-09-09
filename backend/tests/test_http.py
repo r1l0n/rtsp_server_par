@@ -49,6 +49,19 @@ def test_settings_area_redirects_anonymous(client: TestClient, path: str) -> Non
     assert "/login" in response.headers["location"]
 
 
+@pytest.mark.parametrize("path", ["/admin/monitoring", "/admin/monitoring/data"])
+def test_monitoring_is_wired_up_and_closed_to_anonymous(client: TestClient, path: str) -> None:
+    """И страница, и запрос за показаниями требуют входа.
+
+    Данные о нагрузке сервера — сведения о внутреннем устройстве, и отдавать
+    их без сессии нельзя. Заодно доказывает, что раздел вообще подключён:
+    без include_router обе ссылки отвечали бы 404, а меню вело бы в никуда.
+    """
+    response = client.get(path, follow_redirects=False)
+    assert response.status_code == 303
+    assert "/login" in response.headers["location"]
+
+
 def test_login_page_carries_the_theme_attribute(client: TestClient) -> None:
     """Тема должна работать и до входа — страница входа тоже оформлена."""
     assert 'data-theme="dark"' in client.get("/login").text

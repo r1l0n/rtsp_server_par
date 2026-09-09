@@ -1,0 +1,323 @@
+/* Страница мониторинга. Подключается только на ней: таблицу стилей графиков
+ * незачем возить в каждый список камер.
+ *
+ * Палитра рядов живёт в app.css (--chart-1 … --chart-5) вместе с остальной
+ * палитрой — здесь только раскладка и части, из которых собран график.
+ * Цвета отсюда читает и сам холст: JavaScript берёт их через
+ * getComputedStyle, поэтому смена темы меняет графики без единой строчки
+ * цвета в скрипте.
+ */
+
+.mon {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Пока данные докачиваются, картинка не мигает и не прыгает: старый кадр
+   держится приглушённым. Скелет на его месте был бы хуже — глаз каждые
+   несколько секунд ловил бы движение там, где ничего не изменилось. */
+.mon-stale {
+  opacity: 0.55;
+  transition: opacity 120ms ease-out;
+}
+
+/* ── Плитки с главными числами ──────────────────────────────────────────── */
+.mon-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+  gap: var(--space-3);
+}
+
+/* Нижнее поле шире остальных ровно на высоту спарклайна: он лежит на дне
+   плитки, и без запаса вторая строка подписи ложится прямо на него. */
+.mon-tile {
+  position: relative;
+  overflow: hidden;
+  min-height: 152px;
+  padding: var(--space-4);
+  padding-bottom: 46px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.mon-tile-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Пропорциональные цифры, а не моноширинные: у крупного числа равная
+   ширина знаков даёт заметные дыры между цифрами. */
+.mon-tile-value {
+  margin-top: 2px;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.mon-tile-note {
+  font-size: 12px;
+  color: var(--faint);
+  min-height: 16px;
+}
+
+/* Спарклайн лежит на дне плитки и намеренно обрезан: он показывает форму
+   изменения, а не значения, — числа стоят прямо над ним. */
+.mon-spark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: block;
+  width: 100%;
+  height: 40px;
+}
+
+/* ── Карточка с графиком ────────────────────────────────────────────────── */
+.mon-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.mon-subhead {
+  margin-top: var(--space-2);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Подпись рядов — она же таблица текущих значений. Легенда обязана быть
+   всегда, когда рядов больше одного: цвет один опознавать не должен. Число
+   рядом с названием снимает и второй вопрос — «а сколько сейчас», — чтобы
+   за ответом не приходилось наводить курсор. */
+.mon-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  align-items: baseline;
+}
+
+.mon-key {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.mon-key-mark {
+  flex: none;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--mon-key, var(--chart-1));
+}
+
+.mon-key-name { color: var(--muted); }
+
+.mon-key-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.mon-plot {
+  position: relative;
+  /* Высота вместе с полосой подписей времени: если считать только поле
+     графика, подписи не влезают и внутри карточки заводится собственная
+     полоса прокрутки. */
+  height: 232px;
+}
+
+.mon-plot canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.mon-plot-sm { height: 176px; }
+
+/* Всплывающая подсказка. Значение — крупное и контрастное, название ряда —
+   второстепенное: ряд читатель уже выбрал глазами, ему нужно число. */
+/* Точка отсчёта — левый верхний угол поля графика: подсказку двигает
+   transform, а без явных top/left она считалась бы от места, где элемент
+   стоит в потоке, то есть из-под холста. */
+.mon-tip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  min-width: 148px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  font-size: 13px;
+  pointer-events: none;
+  transform: translate(var(--tip-x, 0), var(--tip-y, 0));
+}
+
+.mon-tip[hidden] { display: none; }
+
+.mon-tip-time {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.mon-tip-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  line-height: 1.5;
+}
+
+.mon-tip-mark {
+  flex: none;
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--mon-key, var(--chart-1));
+}
+
+.mon-tip-value {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.mon-tip-name { color: var(--muted); }
+
+/* ── Сетка из нескольких графиков (интерфейсы, диски) ───────────────────── */
+.mon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-4);
+}
+
+.mon-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.mon-cell-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* ── Ядра ───────────────────────────────────────────────────────────────── */
+.mon-cores { margin-top: var(--space-2); }
+
+.mon-core-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* Ядро — один цвет и длина полосы. Красить занятое ядро в красный было бы
+   неправдой: полностью загруженное ядро — это работа, а не поломка. */
+.mon-core {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.mon-core-name {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.mon-core-value {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mon-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--mon-fill, var(--chart-1)) 18%, transparent);
+  overflow: hidden;
+}
+
+.mon-bar-fill {
+  display: block;
+  height: 100%;
+  width: var(--mon-value, 0%);
+  border-radius: 3px;
+  background: var(--mon-fill, var(--chart-1));
+}
+
+/* ── Разделы и датчики ──────────────────────────────────────────────────── */
+.mon-meters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mon-meter {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 2fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mon-meter-name {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mon-meter-value {
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* ── Сводка по сервису ──────────────────────────────────────────────────── */
+.mon-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--space-3);
+}
+
+.mon-fact-value {
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.mon-fact-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ── Мелочи ─────────────────────────────────────────────────────────────── */
+.mon-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Выбранный период. Отмечаем рамкой и цветом текста, а не заливкой:
+   залитая кнопка в этой палитре означает главное действие страницы. */
+[data-mon-range].is-active {
+  border-color: color-mix(in srgb, var(--text) 45%, transparent);
+  color: var(--text);
+}
+
+@media (max-width: 860px) {
+  .mon-plot { height: 196px; }
+  .mon-meter { grid-template-columns: 1fr auto; }
+  .mon-meter .mon-bar { grid-column: 1 / -1; }
+}

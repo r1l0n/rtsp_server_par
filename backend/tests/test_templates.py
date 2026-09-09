@@ -178,6 +178,7 @@ def test_sidebar_hides_admin_sections_from_operators() -> None:
     )
     assert "/admin/users" not in html
     assert "/admin/audit" not in html
+    assert "/admin/monitoring" not in html
 
 
 def test_sidebar_shows_every_section_to_admins() -> None:
@@ -188,7 +189,7 @@ def test_sidebar_shows_every_section_to_admins() -> None:
         request=types.SimpleNamespace(url=types.SimpleNamespace(path="/settings/theme")),
         user=admin, themes=THEMES, theme="dark", csrf_token="t",
     )
-    for link in ("/admin/users", "/admin/audit", "/profile"):
+    for link in ("/admin/users", "/admin/audit", "/admin/monitoring", "/profile"):
         assert link in html, link
 
 
@@ -248,7 +249,7 @@ def test_only_sections_get_a_hover_label() -> None:
         user=admin, themes=THEMES, theme="dark", csrf_token="t",
     )
     labels = re.findall(r'<span class="rail-label">([^<]*)</span>', html)
-    assert labels == ["Камеры", "Пользователи", "Журнал"], labels
+    assert labels == ["Камеры", "Пользователи", "Журнал", "Мониторинг"], labels
 
 
 def test_settings_open_as_a_dialog_not_a_menu_item() -> None:

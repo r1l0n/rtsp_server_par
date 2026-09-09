@@ -19,6 +19,7 @@ from .db import dispose_engine, get_sessionmaker
 from .internal import authz
 from .logging_setup import configure_logging, get_logger
 from .media.mtx_client import close_mtx, get_mtx
+from .metrics import service as service_metrics
 from .middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from .ptz.service import shutdown as ptz_shutdown
 from .ptz.transport import close_client as close_ptz_client
@@ -27,6 +28,7 @@ from .web import (
     admin_views,
     auth_views,
     invite_views,
+    monitoring_views,
     panel_views,
     profile_views,
     public_views,
@@ -136,27 +138,15 @@ async def metrics() -> Response:
     links = Gauge("rtspgw_active_links", "Действующие публичные ссылки", registry=registry)
     viewers = Gauge("rtspgw_active_viewers", "Зрители на публичных ссылках", registry=registry)
 
-    # Зрителей считаем по Redis, а не по view_sessions: та таблица — журнал
-    # открытий, и «активных» сеансов в ней ровно столько, сколько страниц
-    # открыли за последние пять минут.
-    viewers.set(await authz.count_all_viewers())
-
+    # Те же числа показывает страница мониторинга в панели — считаются они
+    # в одном месте (metrics.service), чтобы определения не разъехались.
     async with get_sessionmaker()() as session:
-        rows = await session.execute(
-            text("SELECT status::text, count(*) FROM cameras WHERE is_enabled GROUP BY status")
-        )
-        for status, count in rows:
-            cameras.labels(status=status).set(count)
+        stats = await service_metrics.collect(session)
 
-        links.set(
-            await session.scalar(
-                text(
-                    "SELECT count(*) FROM share_links "
-                    "WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())"
-                )
-            )
-            or 0
-        )
+    for status, count in stats.cameras.items():
+        cameras.labels(status=status).set(count)
+    links.set(stats.links)
+    viewers.set(stats.viewers)
 
     return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
 
@@ -190,6 +180,7 @@ def create_app() -> FastAPI:
     app.include_router(invite_views.router)
     app.include_router(profile_views.router)
     app.include_router(admin_views.router)
+    app.include_router(monitoring_views.router)
     app.include_router(settings_views.router)
     app.include_router(panel_views.router)
 

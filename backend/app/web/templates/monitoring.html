@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}Мониторинг — {{ app_name }}{% endblock %}
+{% block container_class %}container-wide{% endblock %}
+{% block styles %}
+<link rel="stylesheet" href="/static/monitoring.css?v={{ asset_v }}">
+{% endblock %}
+{% block content %}
+
+{# Страница — каркас: числа приезжают отдельным запросом и обновляются на
+   месте. Разделы, которых на этой машине нет (датчиков температуры нет на
+   виртуалке, второго диска — на маленьком сервере), скрыты до тех пор, пока
+   в ответе не окажется данных: пустая карточка «Температура — прочерк»
+   выглядит как поломка, а не как отсутствие железа. #}
+<div class="page-head">
+  <div>
+    <h1>Мониторинг</h1>
+    <div class="subtitle">
+      Нагрузка сервера. Показания снимаются раз в {{ interval }} с
+    </div>
+  </div>
+  {# Переключатель периода — один на всю страницу и над всем, что он
+     задаёт: у каждого графика свой период означал бы, что числа рядом
+     друг с другом относятся к разному времени. #}
+  <div class="actions" role="group" aria-label="Период">
+    {% for key, window in ranges.items() %}
+    <button type="button" data-mon-range="{{ key }}"
+            class="btn btn-secondary{% if key == default_range %} is-active{% endif %}"
+            aria-pressed="{% if key == default_range %}true{% else %}false{% endif %}">
+      {{ window.label }}
+    </button>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="mon" data-monitoring data-interval="{{ interval }}" data-range="{{ default_range }}">
+
+  <p class="alert alert-error" data-mon-problem hidden></p>
+  <p class="alert alert-ok" data-mon-hint hidden></p>
+
+  {# ── Главные числа ────────────────────────────────────────────────────── #}
+  <div class="mon-tiles">
+    <div class="mon-tile">
+      <div class="mon-tile-label">Процессор</div>
+      <div class="mon-tile-value" data-mon="cpu.value">—</div>
+      <div class="mon-tile-note" data-mon="cpu.note"></div>
+      <canvas class="mon-spark" data-mon-spark="cpu" aria-hidden="true"></canvas>
+    </div>
+    <div class="mon-tile">
+      <div class="mon-tile-label">Память</div>
+      <div class="mon-tile-value" data-mon="memory.value">—</div>
+      <div class="mon-tile-note" data-mon="memory.note"></div>
+      <canvas class="mon-spark" data-mon-spark="memory" aria-hidden="true"></canvas>
+    </div>
+    <div class="mon-tile">
+      <div class="mon-tile-label">Сеть</div>
+      <div class="mon-tile-value" data-mon="net.value">—</div>
+      <div class="mon-tile-note" data-mon="net.note"></div>
+      <canvas class="mon-spark" data-mon-spark="net" aria-hidden="true"></canvas>
+    </div>
+    <div class="mon-tile">
+      <div class="mon-tile-label">Диск</div>
+      <div class="mon-tile-value" data-mon="disk.value">—</div>
+      <div class="mon-tile-note" data-mon="disk.note"></div>
+      <canvas class="mon-spark" data-mon-spark="disk" aria-hidden="true"></canvas>
+    </div>
+    <div class="mon-tile">
+      <div class="mon-tile-label">Средняя нагрузка</div>
+      <div class="mon-tile-value" data-mon="load.value">—</div>
+      <div class="mon-tile-note" data-mon="load.note"></div>
+    </div>
+    <div class="mon-tile">
+      <div class="mon-tile-label">Непрерывная работа</div>
+      <div class="mon-tile-value" data-mon="uptime.value">—</div>
+      <div class="mon-tile-note" data-mon="uptime.note"></div>
+    </div>
+  </div>
+
+  {# ── Процессор ────────────────────────────────────────────────────────── #}
+  <section class="card">
+    <div class="mon-head">
+      <div>
+        <div class="card-title">Процессор</div>
+        <div class="muted small">
+          Из чего складывается загрузка: программы, ядро, ожидание диска
+          и время, отнятое гипервизором
+        </div>
+      </div>
+      <div class="mon-legend" data-mon-legend="cpu"></div>
+    </div>
+    <div class="mon-plot" data-mon-chart="cpu"></div>
+    <div class="mon-cores">
+      <div class="mon-subhead">Ядра</div>
+      <div class="mon-core-grid" data-mon="cores"></div>
+    </div>
+  </section>
+
+  {# ── Память ───────────────────────────────────────────────────────────── #}
+  <section class="card">
+    <div class="mon-head">
+      <div>
+        <div class="card-title">Оперативная память</div>
+        <div class="muted small">
+          Кэш и буферы ядро отдаёт программам по первому требованию —
+          занятой памятью они не считаются
+        </div>
+      </div>
+      <div class="mon-legend" data-mon-legend="memory"></div>
+    </div>
+    <div class="mon-plot" data-mon-chart="memory"></div>
+  </section>
+
+  {# ── Сеть ─────────────────────────────────────────────────────────────── #}
+  <section class="card" data-mon-section="net" hidden>
+    <div class="mon-head">
+      <div>
+        <div class="card-title">Сетевые интерфейсы</div>
+        <div class="muted small" data-mon="net.hint"></div>
+      </div>
+    </div>
+    <div class="mon-grid" data-mon="net.charts"></div>
+  </section>
+
+  {# ── Диски ────────────────────────────────────────────────────────────── #}
+  <section class="card" data-mon-section="disk" hidden>
+    <div class="mon-head">
+      <div>
+        <div class="card-title">Диски</div>
+        <div class="muted small">Чтение и запись; занятость — доля времени, когда диск был занят</div>
+      </div>
+    </div>
+    <div class="mon-grid" data-mon="disk.charts"></div>
+  </section>
+
+  <section class="card" data-mon-section="fs" hidden>
+    <div class="mon-head">
+      <div>
+        <div class="card-title">Разделы</div>
+        <div class="muted small">Свободное место без учёта резерва, который файловая система бережёт под себя</div>
+      </div>
+    </div>
+    <div class="mon-meters" data-mon="fs"></div>
+  </section>
+
+  {# ── Температура ──────────────────────────────────────────────────────── #}
+  <section class="card" data-mon-section="temp" hidden>
+    <div class="mon-head">
+      <div class="card-title">Температура</div>
+    </div>
+    <div class="mon-meters" data-mon="temp"></div>
+  </section>
+
+  {# ── Процессы и сервис ────────────────────────────────────────────────── #}
+  <div class="columns">
+    <section class="card" data-mon-section="procs" hidden>
+      <div class="mon-head">
+        <div>
+          <div class="card-title">Процессы</div>
+          <div class="muted small" data-mon="procs.note"></div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr><th>Процесс</th><th class="mon-num">ЦП, %</th><th class="mon-num">Память</th></tr>
+          </thead>
+          <tbody data-mon="procs"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="mon-head">
+        <div>
+          <div class="card-title">Сервис</div>
+          <div class="muted small">Что происходит в самом шлюзе прямо сейчас</div>
+        </div>
+      </div>
+      <div class="mon-facts" data-mon="service"></div>
+    </section>
+  </div>
+
+  <p class="muted small" data-mon="updated" aria-live="polite"></p>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script src="/static/monitoring.js?v={{ asset_v }}" defer></script>
+{% endblock %}

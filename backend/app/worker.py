@@ -24,6 +24,8 @@ from .media.mtx_client import MediaMTXError, close_mtx, get_mtx
 from .media.probe import ProbeResult, probe_rtsp
 from .media.reconciler import reconcile, refresh_statuses
 from .media.snapshot import capture_snapshot
+from .metrics import history as metrics_history
+from .metrics.host import HostMetrics, MetricsUnavailable
 from .models import AuditLog, Camera, CameraStatus, Invitation, ViewSession
 from .redis_client import close_redis
 
@@ -303,6 +305,40 @@ async def _reconcile_loop(stop: asyncio.Event, interval: int) -> None:
             await asyncio.wait_for(stop.wait(), timeout=interval)
 
 
+async def _metrics_loop(stop: asyncio.Event) -> None:
+    """Снимает нагрузку сервера и складывает её в историю для панели.
+
+    Живёт в worker'е по той же причине, что и остальные циклы: при нескольких
+    процессах uvicorn каждый писал бы в один и тот же кольцевой буфер свои
+    замеры, и история превратилась бы в чересполосицу.
+
+    Чтение из procfs синхронное и на машине с сотней процессов занимает
+    миллисекунды — уводим его в поток, чтобы не задерживать остальные циклы.
+    """
+    metrics = HostMetrics()
+    reason = metrics.available()
+    if reason:
+        # Не Linux или procfs не примонтирован. Это не поломка: панель
+        # покажет объяснение вместо графиков, а worker продолжит работу.
+        log.info("metrics_unavailable", reason=reason)
+        return
+
+    interval = max(get_settings().metrics_interval_seconds, 1)
+    log.info("metrics_started", interval=interval)
+    while not stop.is_set():
+        try:
+            reading = await asyncio.to_thread(metrics.sample)
+            if reading is not None:
+                await metrics_history.push(reading)
+        except MetricsUnavailable as exc:
+            log.warning("metrics_stopped", error=str(exc))
+            return
+        except Exception:
+            log.exception("cycle_crashed", cycle="metrics")
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+
+
 async def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -324,6 +360,7 @@ async def run() -> None:
     # расписанию, а проба камеры может занять полминуты на каждую (см.
     # PROBE_INTERVAL_SECONDS).
     probe = asyncio.create_task(_probe_loop(stop), name="probe")
+    metrics = asyncio.create_task(_metrics_loop(stop), name="metrics")
     try:
         await _reconcile_loop(stop, settings.reconcile_interval_seconds)
     finally:
@@ -333,8 +370,11 @@ async def run() -> None:
         # только вместе с коммитом, поэтому недоведённая камера просто
         # попадёт в следующую партию.
         probe.cancel()
+        metrics.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await probe
+        with contextlib.suppress(asyncio.CancelledError):
+            await metrics
 
         await close_mtx()
         await close_redis()

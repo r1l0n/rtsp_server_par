@@ -9,6 +9,9 @@
   {# ?v= — отпечаток статики. Без него браузер час держит старый css из кэша. #}
   <link rel="stylesheet" href="/static/app.css?v={{ asset_v }}">
   <link rel="stylesheet" href="/static/player.css?v={{ asset_v }}">
+  {# Стили страницы, которую открывают не каждый день, — отдельным файлом:
+     таблицу мониторинга незачем возить в каждый список камер. #}
+  {% block styles %}{% endblock %}
 </head>
 <body>
 
@@ -51,6 +54,11 @@
          {% if path.startswith('/admin/audit') %}aria-current="page"{% endif %}>
         <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-journal"></use></svg></span>
         <span class="rail-label">Журнал</span>
+      </a>
+      <a class="rail-item" href="/admin/monitoring"
+         {% if path.startswith('/admin/monitoring') %}aria-current="page"{% endif %}>
+        <span class="rail-glyph"><svg class="i" aria-hidden="true"><use href="#i-monitoring"></use></svg></span>
+        <span class="rail-label">Мониторинг</span>
       </a>
       {% endif %}
     </nav>

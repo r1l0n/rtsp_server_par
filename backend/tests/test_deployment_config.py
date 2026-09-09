@@ -117,6 +117,46 @@ def test_caddy_is_not_on_core_network(compose: dict) -> None:
     assert "core" not in compose["services"]["caddy"]["networks"]
 
 
+def test_host_metrics_are_read_only_and_only_by_the_worker(compose: dict) -> None:
+    """procfs и sysfs хоста достаются одному worker'у и только на чтение.
+
+    Это цена страницы мониторинга: без хозяйского /proc в панели видны
+    интерфейсы контейнера, а не сервера. Отдавать то же самое api нельзя —
+    он единственный, до кого дотягиваются снаружи через Caddy, а worker не
+    принимает ни одного входящего соединения вообще.
+
+    Проверка стережёт обе половины: и что монтирования у worker'а есть
+    (иначе раздел молча показывает не ту машину), и что у api их нет.
+    """
+    worker = compose["services"]["worker"]
+    mounts = [str(v) for v in worker.get("volumes", [])]
+    assert "/proc:/host/proc:ro" in mounts
+    assert "/sys:/host/sys:ro" in mounts
+
+    # Пути задаются переменными самого сервиса, а не общим .env: у api
+    # этих монтирований нет, и указание на несуществующий путь сбило бы
+    # его объяснение «почему графиков нет».
+    assert worker["environment"]["HOST_PROC"] == "/host/proc"
+
+    api_mounts = [str(v) for v in compose["services"]["api"].get("volumes", [])]
+    assert not any("/host/" in mount for mount in api_mounts), (
+        "api не должен видеть procfs хоста: он единственный смотрит наружу"
+    )
+
+
+def test_host_root_is_not_mounted_by_default() -> None:
+    """Весь диск хоста в контейнер по умолчанию не отдаём.
+
+    Строка в compose оставлена закомментированной намеренно: без неё панель
+    показывает место на разделе, где docker держит тома, и этого хватает.
+    Проверяем по тексту файла — в разобранном YAML комментария не видно, а
+    отличить «выключено» от «забыли» иначе нельзя.
+    """
+    text = COMPOSE.read_text(encoding="utf-8")
+    assert "#- /:/host/root:ro" in text
+    assert "\n      - /:/host/root:ro" not in text
+
+
 def test_mediamtx_control_api_is_not_published(compose: dict) -> None:
     ports = [str(p) for p in compose["services"]["mediamtx"].get("ports", [])]
     assert not any("9997" in p or "9998" in p or "8888" in p or "8889" in p for p in ports)
